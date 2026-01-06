@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../widgets/qr_code_display.dart';
+import '../services/server_service.dart';
 
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
@@ -10,19 +11,21 @@ class DesktopHome extends StatefulWidget {
 
 class _DesktopHomeState extends State<DesktopHome> {
   bool isStarted = false;
+  bool isLoading = false;
 
-  // Temporary demo values
-  final String ip = '192.168.1.5';
-  final int port = 52343;
+  final ServerService _serverService = ServerService();
+  String? connectionUrl;
 
   @override
   Widget build(BuildContext context) {
-    final String connectionUrl = 'http://$ip:$port';
-
     return Scaffold(
       appBar: AppBar(title: const Text('UniShare – Desktop')),
       body: Center(
-        child: isStarted ? _buildQrView(connectionUrl) : _buildStartView(),
+        child: isStarted
+            ? _buildQrView()
+            : isLoading
+            ? const CircularProgressIndicator()
+            : _buildStartView(),
       ),
     );
   }
@@ -40,11 +43,7 @@ class _DesktopHomeState extends State<DesktopHome> {
         ),
         const SizedBox(height: 24),
         FilledButton.icon(
-          onPressed: () {
-            setState(() {
-              isStarted = true;
-            });
-          },
+          onPressed: _startServer,
           icon: const Icon(Icons.qr_code),
           label: const Text('Start & Show QR'),
         ),
@@ -52,8 +51,23 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
+  /// Start real server
+  Future<void> _startServer() async {
+    setState(() {
+      isLoading = true;
+    });
+
+    await _serverService.start();
+
+    setState(() {
+      connectionUrl = 'http://${_serverService.ip}:${_serverService.port}';
+      isStarted = true;
+      isLoading = false;
+    });
+  }
+
   /// QR code screen
-  Widget _buildQrView(String connectionUrl) {
+  Widget _buildQrView() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -62,9 +76,9 @@ class _DesktopHomeState extends State<DesktopHome> {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 8),
-        Text(connectionUrl),
+        Text(connectionUrl!),
         const SizedBox(height: 24),
-        QrCodeDisplay(data: connectionUrl),
+        QrCodeDisplay(data: connectionUrl!),
         const SizedBox(height: 24),
         const Text(
           'Scan this QR code from the mobile app',
