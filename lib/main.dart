@@ -39,6 +39,8 @@ class UniShareApp extends StatelessWidget {
       return const DesktopHome();
     } else if (Platform.isAndroid) {
       return const MobileHome();
+    } else if (Platform.isLinux) {
+      return const DesktopHome();
     } else {
       return const HomeScreen();
     }
