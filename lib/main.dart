@@ -1,14 +1,14 @@
-import 'package:flutter/material.dart';
-import 'screens/home_screen.dart'; // We are going to create this file
+import 'dart:io';
 
-/// Entry point of the Flutter application.
-/// This is the first function that runs when the app starts.
+import 'package:flutter/material.dart';
+import 'screens/home_screen.dart';
+import 'screens/desktop_home.dart';
+import 'screens/mobile_home.dart';
+
 void main() {
   runApp(const UniShareApp());
 }
 
-/// Root widget of the entire application.
-/// It sets up themes, routes, and the first screen.
 class UniShareApp extends StatelessWidget {
   const UniShareApp({super.key});
 
@@ -16,26 +16,31 @@ class UniShareApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'UniShare',
-
-      // Remove the debug banner in the top-right corner.
       debugShowCheckedModeBanner: false,
 
-      // Light theme
       theme: ThemeData(
         useMaterial3: true,
-        colorSchemeSeed: Colors.blue, // All colors are based on this seed
+        colorSchemeSeed: Colors.blue,
         brightness: Brightness.light,
       ),
 
-      // Dark theme
       darkTheme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: Colors.blue,
         brightness: Brightness.dark,
       ),
 
-      // First screen that will be shown when the app starts.
-      home: const HomeScreen(),
+      home: _getStartScreen(),
     );
+  }
+
+  Widget _getStartScreen() {
+    if (Platform.isWindows) {
+      return const DesktopHome();
+    } else if (Platform.isAndroid) {
+      return const MobileHome();
+    } else {
+      return const HomeScreen();
+    }
   }
 }

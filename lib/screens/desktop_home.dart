@@ -7,12 +7,17 @@ class DesktopHome extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('UniShare – Desktop')),
-      body: const Center(
-        child: Text(
-          'Desktop Mode\n\nServer will run here.\nQR code will be shown here.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 16),
-        ),
+      body: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ElevatedButton(onPressed: () {}, child: Text('Sent')),
+              ElevatedButton(onPressed: () {}, child: Text('Recieve')),
+            ],
+          ),
+        ],
       ),
     );
   }
