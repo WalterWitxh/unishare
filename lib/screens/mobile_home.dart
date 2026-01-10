@@ -1,8 +1,8 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import '../services/connection_service.dart';
-import '../services/http_client_service.dart';
-
 
 class MobileHome extends StatefulWidget {
   const MobileHome({super.key});
@@ -14,16 +14,35 @@ class MobileHome extends StatefulWidget {
 class _MobileHomeState extends State<MobileHome> {
   String? scannedUrl;
   bool isScanning = true;
-  bool isChecking = false;
+  bool isConnecting = false;
+  bool isConnected = false;
+  String? errorMessage;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('UniShare – Mobile')),
-      body: isScanning ? _buildScanner() : _buildConnectedView(),
+      body: _buildBody(),
     );
   }
 
+  Widget _buildBody() {
+    if (isScanning) {
+      return _buildScanner();
+    }
+
+    if (isConnecting) {
+      return _buildConnectingView();
+    }
+
+    if (isConnected) {
+      return _buildConnectedView();
+    }
+
+    return _buildErrorView();
+  }
+
+  /// QR Scanner view
   Widget _buildScanner() {
     return Column(
       children: [
@@ -36,65 +55,121 @@ class _MobileHomeState extends State<MobileHome> {
         ),
         Expanded(
           child: MobileScanner(
-            onDetect: (capture) async {
-  final barcode = capture.barcodes.first;
-  final String? code = barcode.rawValue;
+            onDetect: (capture) {
+              final barcode = capture.barcodes.first;
+              final String? code = barcode.rawValue;
 
-  if (code == null) return;
+              if (code != null) {
+                setState(() {
+                  scannedUrl = code;
+                  isScanning = false;
+                  isConnecting = true;
+                });
 
-  setState(() {
-    isScanning = false;
-    scannedUrl = 'Connecting...';
-  });
-
-  final isConnected =
-      await HttpClientService.testConnection(code);
-
-  if (!mounted) return;
-
-  if (isConnected) {
-    setState(() {
-      scannedUrl = code;
-    });
-  } else {
-    setState(() {
-      isScanning = true;
-      scannedUrl = null;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Failed to connect to desktop'),
-      ),
-    );
-  }
-},
-
+                _connectToServer(code);
+              }
+            },
           ),
         ),
       ],
     );
   }
 
+  /// Connecting UI
+  Widget _buildConnectingView() {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text('Connecting to desktop...'),
+        ],
+      ),
+    );
+  }
+
+  /// Connected UI
   Widget _buildConnectedView() {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.check_circle,
-              color: Colors.green, size: 64),
+          const Icon(Icons.check_circle, color: Colors.green, size: 64),
           const SizedBox(height: 16),
           const Text(
             'Connected',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
+          Text(scannedUrl ?? ''),
+        ],
+      ),
+    );
+  }
+
+  /// Error UI
+  Widget _buildErrorView() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error, color: Colors.red, size: 64),
+          const SizedBox(height: 16),
           Text(
-            scannedUrl ?? '',
+            errorMessage ?? 'Connection failed',
             textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: () {
+              setState(() {
+                isScanning = true;
+                isConnecting = false;
+                isConnected = false;
+                errorMessage = null;
+                scannedUrl = null;
+              });
+            },
+            child: const Text('Scan Again'),
           ),
         ],
       ),
     );
+  }
+
+  /// Actual connection logic
+  Future<void> _connectToServer(String url) async {
+    try {
+      final uri = Uri.parse('$url/ping');
+      final client = HttpClient();
+
+      final request = await client
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 5));
+
+      final response = await request.close();
+
+      if (response.statusCode == 200) {
+        setState(() {
+          isConnecting = false;
+          isConnected = true;
+        });
+      } else {
+        throw Exception('Server not reachable');
+      }
+    } on TimeoutException {
+      _handleFailure('Connection timed out');
+    } catch (e) {
+      _handleFailure('Failed to connect to desktop');
+    }
+  }
+
+  void _handleFailure(String message) {
+    setState(() {
+      isConnecting = false;
+      isConnected = false;
+      errorMessage = message;
+    });
   }
 }
