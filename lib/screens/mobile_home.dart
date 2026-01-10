@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../services/connection_service.dart';
+import '../services/http_client_service.dart';
+
 
 class MobileHome extends StatefulWidget {
   const MobileHome({super.key});
@@ -35,39 +37,39 @@ class _MobileHomeState extends State<MobileHome> {
         Expanded(
           child: MobileScanner(
             onDetect: (capture) async {
-              if (isChecking) return;
+  final barcode = capture.barcodes.first;
+  final String? code = barcode.rawValue;
 
-              final barcode = capture.barcodes.first;
-              final String? code = barcode.rawValue;
+  if (code == null) return;
 
-              if (code != null) {
-                setState(() {
-                  isChecking = true;
-                });
+  setState(() {
+    isScanning = false;
+    scannedUrl = 'Connecting...';
+  });
 
-                final success =
-                    await ConnectionService.testConnection(code);
+  final isConnected =
+      await HttpClientService.testConnection(code);
 
-                if (!mounted) return;
+  if (!mounted) return;
 
-                if (success) {
-                  setState(() {
-                    scannedUrl = code;
-                    isScanning = false;
-                  });
-                } else {
-                  setState(() {
-                    isChecking = false;
-                  });
+  if (isConnected) {
+    setState(() {
+      scannedUrl = code;
+    });
+  } else {
+    setState(() {
+      isScanning = true;
+      scannedUrl = null;
+    });
 
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Failed to connect to desktop server'),
-                    ),
-                  );
-                }
-              }
-            },
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Failed to connect to desktop'),
+      ),
+    );
+  }
+},
+
           ),
         ),
       ],
