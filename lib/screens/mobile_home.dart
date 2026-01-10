@@ -1,8 +1,7 @@
 import 'dart:async';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:http/http.dart' as http;
 
 class MobileHome extends StatefulWidget {
   const MobileHome({super.key});
@@ -11,12 +10,24 @@ class MobileHome extends StatefulWidget {
   State<MobileHome> createState() => _MobileHomeState();
 }
 
+enum ConnectionStateStatus {
+  scanning,
+  connecting,
+  connected,
+  failed,
+}
+
 class _MobileHomeState extends State<MobileHome> {
-  String? scannedUrl;
-  bool isScanning = true;
-  bool isConnecting = false;
-  bool isConnected = false;
-  String? errorMessage;
+  String? serverUrl;
+  ConnectionStateStatus status = ConnectionStateStatus.scanning;
+
+  Timer? _pingTimer;
+
+  @override
+  void dispose() {
+    _pingTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,46 +38,38 @@ class _MobileHomeState extends State<MobileHome> {
   }
 
   Widget _buildBody() {
-    if (isScanning) {
-      return _buildScanner();
-    }
+    switch (status) {
+      case ConnectionStateStatus.scanning:
+        return _buildScanner();
 
-    if (isConnecting) {
-      return _buildConnectingView();
-    }
+      case ConnectionStateStatus.connecting:
+        return _buildConnecting();
 
-    if (isConnected) {
-      return _buildConnectedView();
-    }
+      case ConnectionStateStatus.connected:
+        return _buildConnected();
 
-    return _buildErrorView();
+      case ConnectionStateStatus.failed:
+        return _buildFailed();
+    }
   }
 
-  /// QR Scanner view
+  // ---------- SCAN ----------
   Widget _buildScanner() {
     return Column(
       children: [
         const Padding(
           padding: EdgeInsets.all(12),
           child: Text(
-            'Scan the QR code shown on the Desktop app',
+            'Scan the QR code shown on Desktop',
             textAlign: TextAlign.center,
           ),
         ),
         Expanded(
           child: MobileScanner(
             onDetect: (capture) {
-              final barcode = capture.barcodes.first;
-              final String? code = barcode.rawValue;
-
+              final code = capture.barcodes.first.rawValue;
               if (code != null) {
-                setState(() {
-                  scannedUrl = code;
-                  isScanning = false;
-                  isConnecting = true;
-                });
-
-                _connectToServer(code);
+                _onQrScanned(code);
               }
             },
           ),
@@ -75,8 +78,17 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  /// Connecting UI
-  Widget _buildConnectingView() {
+  void _onQrScanned(String url) {
+    setState(() {
+      serverUrl = url;
+      status = ConnectionStateStatus.connecting;
+    });
+
+    _checkConnection();
+  }
+
+  // ---------- CONNECTING ----------
+  Widget _buildConnecting() {
     return const Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -89,46 +101,47 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  /// Connected UI
-  Widget _buildConnectedView() {
+  // ---------- CONNECTED ----------
+  Widget _buildConnected() {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.check_circle, color: Colors.green, size: 64),
+          const Icon(Icons.check_circle, color: Colors.green, size: 72),
           const SizedBox(height: 16),
           const Text(
             'Connected',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
-          Text(scannedUrl ?? ''),
+          Text(serverUrl ?? ''),
+          const SizedBox(height: 24),
+          FilledButton(
+            onPressed: _disconnect,
+            child: const Text('Disconnect'),
+          ),
         ],
       ),
     );
   }
 
-  /// Error UI
-  Widget _buildErrorView() {
+  // ---------- FAILED ----------
+  Widget _buildFailed() {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.error, color: Colors.red, size: 64),
+          const Icon(Icons.error, color: Colors.red, size: 72),
           const SizedBox(height: 16),
-          Text(
-            errorMessage ?? 'Connection failed',
-            textAlign: TextAlign.center,
+          const Text(
+            'Connection Failed',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 16),
-          ElevatedButton(
+          FilledButton(
             onPressed: () {
               setState(() {
-                isScanning = true;
-                isConnecting = false;
-                isConnected = false;
-                errorMessage = null;
-                scannedUrl = null;
+                status = ConnectionStateStatus.scanning;
               });
             },
             child: const Text('Scan Again'),
@@ -138,38 +151,60 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  /// Actual connection logic
-  Future<void> _connectToServer(String url) async {
+  // ---------- NETWORK LOGIC ----------
+  Future<void> _checkConnection() async {
     try {
-      final uri = Uri.parse('$url/ping');
-      final client = HttpClient();
+      final uri = Uri.parse('$serverUrl/ping');
 
-      final request = await client
-          .getUrl(uri)
-          .timeout(const Duration(seconds: 5));
-
-      final response = await request.close();
+      final response = await http
+          .get(uri)
+          .timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
         setState(() {
-          isConnecting = false;
-          isConnected = true;
+          status = ConnectionStateStatus.connected;
         });
+
+        _startHeartbeat();
       } else {
-        throw Exception('Server not reachable');
+        _failConnection();
       }
-    } on TimeoutException {
-      _handleFailure('Connection timed out');
-    } catch (e) {
-      _handleFailure('Failed to connect to desktop');
+    } catch (_) {
+      _failConnection();
     }
   }
 
-  void _handleFailure(String message) {
+  void _startHeartbeat() {
+    _pingTimer?.cancel();
+    _pingTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      try {
+        final response = await http
+            .get(Uri.parse('$serverUrl/ping'))
+            .timeout(const Duration(seconds: 3));
+
+        if (response.statusCode != 200) {
+          _failConnection();
+        }
+      } catch (_) {
+        _failConnection();
+      }
+    });
+  }
+
+  void _failConnection() {
+    _pingTimer?.cancel();
+    if (!mounted) return;
+
     setState(() {
-      isConnecting = false;
-      isConnected = false;
-      errorMessage = message;
+      status = ConnectionStateStatus.failed;
+    });
+  }
+
+  void _disconnect() {
+    _pingTimer?.cancel();
+    setState(() {
+      status = ConnectionStateStatus.scanning;
+      serverUrl = null;
     });
   }
 }
