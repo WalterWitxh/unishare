@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import '../services/connection_service.dart';
 
 class MobileHome extends StatefulWidget {
   const MobileHome({super.key});
@@ -11,13 +12,12 @@ class MobileHome extends StatefulWidget {
 class _MobileHomeState extends State<MobileHome> {
   String? scannedUrl;
   bool isScanning = true;
+  bool isChecking = false;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('UniShare – Mobile'),
-      ),
+      appBar: AppBar(title: const Text('UniShare – Mobile')),
       body: isScanning ? _buildScanner() : _buildConnectedView(),
     );
   }
@@ -34,15 +34,38 @@ class _MobileHomeState extends State<MobileHome> {
         ),
         Expanded(
           child: MobileScanner(
-            onDetect: (capture) {
+            onDetect: (capture) async {
+              if (isChecking) return;
+
               final barcode = capture.barcodes.first;
               final String? code = barcode.rawValue;
 
               if (code != null) {
                 setState(() {
-                  scannedUrl = code;
-                  isScanning = false;
+                  isChecking = true;
                 });
+
+                final success =
+                    await ConnectionService.testConnection(code);
+
+                if (!mounted) return;
+
+                if (success) {
+                  setState(() {
+                    scannedUrl = code;
+                    isScanning = false;
+                  });
+                } else {
+                  setState(() {
+                    isChecking = false;
+                  });
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Failed to connect to desktop server'),
+                    ),
+                  );
+                }
               }
             },
           ),
@@ -56,11 +79,8 @@ class _MobileHomeState extends State<MobileHome> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(
-            Icons.check_circle,
-            color: Colors.green,
-            size: 64,
-          ),
+          const Icon(Icons.check_circle,
+              color: Colors.green, size: 64),
           const SizedBox(height: 16),
           const Text(
             'Connected',
