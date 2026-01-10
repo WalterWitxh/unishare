@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+
 import 'package:flutter/material.dart';
 import '../widgets/qr_code_display.dart';
 import '../services/server_service.dart';
@@ -22,7 +25,7 @@ class _DesktopHomeState extends State<DesktopHome> {
       appBar: AppBar(title: const Text('UniShare – Desktop')),
       body: Center(
         child: isServerRunning
-            ? _buildRunningView()
+            ? _buildMainLayout()
             : isLoading
                 ? const CircularProgressIndicator()
                 : _buildStartView(),
@@ -30,7 +33,7 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  /// Initial screen
+  /// Start screen
   Widget _buildStartView() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -51,26 +54,65 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  /// Server running view
-  Widget _buildRunningView() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Text(
-          'Server Running',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        Text(connectionUrl!, textAlign: TextAlign.center),
-        const SizedBox(height: 24),
-        QrCodeDisplay(data: connectionUrl!),
-        const SizedBox(height: 24),
-        FilledButton.icon(
-          onPressed: _stopServer,
-          icon: const Icon(Icons.stop),
-          label: const Text('Stop Server'),
-        ),
-      ],
+  /// Main layout after server starts
+  Widget _buildMainLayout() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Row(
+        children: [
+          // LEFT SIDE – QR + Stop
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  'Scan QR on Mobile',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                QrCodeDisplay(data: connectionUrl!),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: _stopServer,
+                  icon: const Icon(Icons.stop),
+                  label: const Text('Stop Server'),
+                ),
+              ],
+            ),
+          ),
+
+          const VerticalDivider(width: 40),
+
+          // RIGHT SIDE – Actions
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                FilledButton.icon(
+  onPressed: _pickAndShareFile,
+  icon: const Icon(Icons.upload),
+  label: const Text('Send'),
+  style: FilledButton.styleFrom(
+    minimumSize: const Size(160, 48),
+  ),
+),
+
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    // TODO: Show received files later
+                  },
+                  icon: const Icon(Icons.download),
+                  label: const Text('Receive'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(160, 48),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -98,4 +140,22 @@ class _DesktopHomeState extends State<DesktopHome> {
       connectionUrl = null;
     });
   }
+  Future<void> _pickAndShareFile() async {
+  final result = await FilePicker.platform.pickFiles();
+
+  if (result == null || result.files.isEmpty) return;
+
+  final pickedFile = result.files.first;
+
+  if (pickedFile.path == null) return;
+
+  final file = File(pickedFile.path!);
+
+  _serverService.addFile(file);
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('${pickedFile.name} ready to send')),
+  );
+}
+
 }
