@@ -10,7 +10,7 @@ class DesktopHome extends StatefulWidget {
 }
 
 class _DesktopHomeState extends State<DesktopHome> {
-  bool isStarted = false;
+  bool isServerRunning = false;
   bool isLoading = false;
 
   final ServerService _serverService = ServerService();
@@ -21,16 +21,16 @@ class _DesktopHomeState extends State<DesktopHome> {
     return Scaffold(
       appBar: AppBar(title: const Text('UniShare – Desktop')),
       body: Center(
-        child: isStarted
-            ? _buildQrView()
+        child: isServerRunning
+            ? _buildRunningView()
             : isLoading
-            ? const CircularProgressIndicator()
-            : _buildStartView(),
+                ? const CircularProgressIndicator()
+                : _buildStartView(),
       ),
     );
   }
 
-  /// Initial screen with button
+  /// Initial screen
   Widget _buildStartView() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -44,14 +44,37 @@ class _DesktopHomeState extends State<DesktopHome> {
         const SizedBox(height: 24),
         FilledButton.icon(
           onPressed: _startServer,
-          icon: const Icon(Icons.qr_code),
-          label: const Text('Start & Show QR'),
+          icon: const Icon(Icons.play_arrow),
+          label: const Text('Start Server'),
         ),
       ],
     );
   }
 
-  /// Start real server
+  /// Server running view
+  Widget _buildRunningView() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Text(
+          'Server Running',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Text(connectionUrl!, textAlign: TextAlign.center),
+        const SizedBox(height: 24),
+        QrCodeDisplay(data: connectionUrl!),
+        const SizedBox(height: 24),
+        FilledButton.icon(
+          onPressed: _stopServer,
+          icon: const Icon(Icons.stop),
+          label: const Text('Stop Server'),
+        ),
+      ],
+    );
+  }
+
+  /// Start HTTP server
   Future<void> _startServer() async {
     setState(() {
       isLoading = true;
@@ -61,30 +84,18 @@ class _DesktopHomeState extends State<DesktopHome> {
 
     setState(() {
       connectionUrl = 'http://${_serverService.ip}:${_serverService.port}';
-      isStarted = true;
+      isServerRunning = true;
       isLoading = false;
     });
   }
 
-  /// QR code screen
-  Widget _buildQrView() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Text(
-          'Server Running',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        Text(connectionUrl!),
-        const SizedBox(height: 24),
-        QrCodeDisplay(data: connectionUrl!),
-        const SizedBox(height: 24),
-        const Text(
-          'Scan this QR code from the mobile app',
-          textAlign: TextAlign.center,
-        ),
-      ],
-    );
+  /// Stop HTTP server
+  Future<void> _stopServer() async {
+    await _serverService.stop();
+
+    setState(() {
+      isServerRunning = false;
+      connectionUrl = null;
+    });
   }
 }
