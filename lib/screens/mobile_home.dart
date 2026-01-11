@@ -5,8 +5,6 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import '../services/http_client_service.dart';
 
-
-
 class MobileHome extends StatefulWidget {
   const MobileHome({super.key});
 
@@ -21,15 +19,25 @@ enum ConnectionStateStatus {
   failed,
 }
 
+enum ConnectedView {
+  menu,
+  receive,
+}
+
 class _MobileHomeState extends State<MobileHome> {
   String? serverUrl;
   ConnectionStateStatus status = ConnectionStateStatus.scanning;
+  ConnectedView connectedView = ConnectedView.menu;
 
   Timer? _pingTimer;
+  Timer? _filePollTimer;
+
+  List<String> _availableFiles = [];
 
   @override
   void dispose() {
     _pingTimer?.cancel();
+    _filePollTimer?.cancel();
     super.dispose();
   }
 
@@ -45,13 +53,10 @@ class _MobileHomeState extends State<MobileHome> {
     switch (status) {
       case ConnectionStateStatus.scanning:
         return _buildScanner();
-
       case ConnectionStateStatus.connecting:
         return _buildConnecting();
-
       case ConnectionStateStatus.connected:
         return _buildConnected();
-
       case ConnectionStateStatus.failed:
         return _buildFailed();
     }
@@ -107,83 +112,101 @@ class _MobileHomeState extends State<MobileHome> {
 
   // ---------- CONNECTED ----------
   Widget _buildConnected() {
-  return Column(
-    children: [
-      Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text(
-              'Connected',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            TextButton(
-              onPressed: _disconnect,
-              child: const Text('Disconnect'),
-            ),
-          ],
-        ),
+    if (connectedView == ConnectedView.menu) {
+      return _buildConnectedMenu();
+    } else {
+      return _buildReceiveView();
+    }
+  }
+
+  // ---------- MENU (your drawing) ----------
+  Widget _buildConnectedMenu() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          FilledButton(
+            onPressed: _disconnect,
+            child: const Text('Close Connection'),
+          ),
+          const SizedBox(height: 40),
+          FilledButton(
+            onPressed: () {
+              // Future: Phone → PC
+            },
+            child: const Text('Send'),
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: () {
+              setState(() {
+                connectedView = ConnectedView.receive;
+              });
+            },
+            child: const Text('Receive'),
+          ),
+        ],
       ),
+    );
+  }
 
-      const Divider(),
-
-      Expanded(
-        child: FutureBuilder<List<String>>(
-          future: HttpClientService.getFiles(serverUrl!),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            if (snapshot.hasError) {
-              return const Center(child: Text('Connection lost'));
-            }
-
-            final files = snapshot.data ?? [];
-
-            if (files.isEmpty) {
-              return const Center(child: Text('No files available'));
-            }
-
-            return ListView.builder(
-              itemCount: files.length,
-              itemBuilder: (context, index) {
-                final fileName = files[index];
-
-                return ListTile(
-                  leading: const Icon(Icons.insert_drive_file),
-                  title: Text(fileName),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.download),
-                    onPressed: () async {
-                      final dir = await getApplicationDocumentsDirectory();
-                      final savePath = '${dir.path}/$fileName';
-
-                      await HttpClientService.downloadFile(
-                        serverUrl!,
-                        fileName,
-                        savePath,
-                      );
-
-                      if (!mounted) return;
-
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('$fileName downloaded')),
-                      );
-                    },
+  // ---------- RECEIVE ----------
+  Widget _buildReceiveView() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: FilledButton(
+            onPressed: () {
+              setState(() {
+                connectedView = ConnectedView.menu;
+              });
+            },
+            child: const Text('Back'),
+          ),
+        ),
+        Expanded(
+          child: _availableFiles.isEmpty
+              ? const Center(
+                  child: Text(
+                    'Waiting for desktop files...',
+                    textAlign: TextAlign.center,
                   ),
-                );
-              },
-            );
-          },
+                )
+              : ListView.builder(
+                  itemCount: _availableFiles.length,
+                  itemBuilder: (context, index) {
+                    final fileName = _availableFiles[index];
+
+                    return ListTile(
+                      leading: const Icon(Icons.insert_drive_file),
+                      title: Text(fileName),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.download),
+                        onPressed: () async {
+                          final dir = await getApplicationDocumentsDirectory();
+                          final savePath = '${dir.path}/$fileName';
+
+                          await HttpClientService.downloadFile(
+                            serverUrl!,
+                            fileName,
+                            savePath,
+                          );
+
+                          if (!mounted) return;
+
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('$fileName downloaded')),
+                          );
+                        },
+                      ),
+                    );
+                  },
+                ),
         ),
-      ),
-    ],
-  );
-}
-
-
+      ],
+    );
+  }
 
   // ---------- FAILED ----------
   Widget _buildFailed() {
@@ -211,21 +234,21 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ---------- NETWORK LOGIC ----------
+  // ---------- NETWORK ----------
   Future<void> _checkConnection() async {
     try {
       final uri = Uri.parse('$serverUrl/ping');
-
-      final response = await http
-          .get(uri)
-          .timeout(const Duration(seconds: 4));
+      final response =
+          await http.get(uri).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
         setState(() {
           status = ConnectionStateStatus.connected;
+          connectedView = ConnectedView.menu;
         });
 
         _startHeartbeat();
+        _startFilePolling();
       } else {
         _failConnection();
       }
@@ -238,33 +261,50 @@ class _MobileHomeState extends State<MobileHome> {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       try {
-        final response = await http
+        final res = await http
             .get(Uri.parse('$serverUrl/ping'))
             .timeout(const Duration(seconds: 3));
-
-        if (response.statusCode != 200) {
-          _failConnection();
-        }
+        if (res.statusCode != 200) _failConnection();
       } catch (_) {
         _failConnection();
       }
     });
   }
 
+  void _startFilePolling() {
+    _filePollTimer?.cancel();
+    _filePollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      try {
+        final files = await HttpClientService.getFiles(serverUrl!);
+        if (!mounted) return;
+
+        setState(() {
+          _availableFiles = files;
+        });
+      } catch (_) {}
+    });
+  }
+
   void _failConnection() {
     _pingTimer?.cancel();
+    _filePollTimer?.cancel();
     if (!mounted) return;
 
     setState(() {
       status = ConnectionStateStatus.failed;
+      _availableFiles.clear();
     });
   }
 
   void _disconnect() {
     _pingTimer?.cancel();
+    _filePollTimer?.cancel();
+
     setState(() {
       status = ConnectionStateStatus.scanning;
       serverUrl = null;
+      connectedView = ConnectedView.menu;
+      _availableFiles.clear();
     });
   }
 }
