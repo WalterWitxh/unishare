@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import '../services/http_client_service.dart';
+
 
 
 class MobileHome extends StatefulWidget {
@@ -105,27 +107,83 @@ class _MobileHomeState extends State<MobileHome> {
 
   // ---------- CONNECTED ----------
   Widget _buildConnected() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.check_circle, color: Colors.green, size: 72),
-          const SizedBox(height: 16),
-          const Text(
-            'Connected',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Text(serverUrl ?? ''),
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _disconnect,
-            child: const Text('Disconnect'),
-          ),
-        ],
+  return Column(
+    children: [
+      Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Connected',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            TextButton(
+              onPressed: _disconnect,
+              child: const Text('Disconnect'),
+            ),
+          ],
+        ),
       ),
-    );
-  }
+
+      const Divider(),
+
+      Expanded(
+        child: FutureBuilder<List<String>>(
+          future: HttpClientService.getFiles(serverUrl!),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            if (snapshot.hasError) {
+              return const Center(child: Text('Connection lost'));
+            }
+
+            final files = snapshot.data ?? [];
+
+            if (files.isEmpty) {
+              return const Center(child: Text('No files available'));
+            }
+
+            return ListView.builder(
+              itemCount: files.length,
+              itemBuilder: (context, index) {
+                final fileName = files[index];
+
+                return ListTile(
+                  leading: const Icon(Icons.insert_drive_file),
+                  title: Text(fileName),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.download),
+                    onPressed: () async {
+                      final dir = await getApplicationDocumentsDirectory();
+                      final savePath = '${dir.path}/$fileName';
+
+                      await HttpClientService.downloadFile(
+                        serverUrl!,
+                        fileName,
+                        savePath,
+                      );
+
+                      if (!mounted) return;
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('$fileName downloaded')),
+                      );
+                    },
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    ],
+  );
+}
+
+
 
   // ---------- FAILED ----------
   Widget _buildFailed() {
