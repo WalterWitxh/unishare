@@ -86,20 +86,60 @@ class _MobileHomeState extends State<MobileHome> {
       );
     }
 
-    return Column(
+    return Stack(
       children: [
-        const Padding(
-          padding: EdgeInsets.all(12),
-          child: Text(
-            'Scan the QR code shown on Desktop',
-            textAlign: TextAlign.center,
+        // Camera
+        MobileScanner(
+          onDetect: (capture) {
+            final code = capture.barcodes.first.rawValue;
+            if (code != null) _onQrScanned(code);
+          },
+        ),
+
+        // Dark overlay
+        Container(color: Colors.black.withOpacity(0.6)),
+
+        // Scan box
+        Center(
+          child: Container(
+            width: 260,
+            height: 260,
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: const Color.fromARGB(255, 78, 175, 255),
+                width: 3,
+              ),
+              borderRadius: BorderRadius.circular(16),
+            ),
           ),
         ),
-        Expanded(
-          child: MobileScanner(
-            onDetect: (capture) {
-              final code = capture.barcodes.first.rawValue;
-              if (code != null) _onQrScanned(code);
+
+        // Instruction text
+        Positioned(
+          bottom: 120,
+          left: 0,
+          right: 0,
+          child: const Text(
+            'Align QR code inside the box',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+
+        // Back button
+        Positioned(
+          top: 40,
+          left: 16,
+          child: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () {
+              setState(() {
+                showScanner = false;
+              });
             },
           ),
         ),

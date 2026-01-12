@@ -21,9 +21,7 @@ class ServerService {
     final router = Router();
 
     // ---------- BASIC ----------
-    router.get('/ping', (Request request) {
-      return Response.ok('OK');
-    });
+    router.get('/ping', (Request request) => Response.ok('OK'));
 
     // ---------- PC → PHONE ----------
     router.get('/files', _handleFileList);
@@ -32,18 +30,19 @@ class ServerService {
     // ---------- PHONE → PC ----------
     router.post('/upload', _handleUpload);
 
-    // Setup
-    ip = await _getLocalIp();
-    port = 52343;
-
-    _receivedDir = Directory('received');
+    // ---------- DESKTOP RECEIVE LOCATION ----------
+    _receivedDir = _getDesktopReceiveDir();
     if (!await _receivedDir.exists()) {
       await _receivedDir.create(recursive: true);
     }
 
+    ip = await _getLocalIp();
+    port = 52343;
+
     _server = await shelf_io.serve(router, InternetAddress.anyIPv4, port);
 
     print('Server running at http://$ip:$port');
+    print('📁 Receiving files at: ${_receivedDir.path}');
   }
 
   /// Stop server
@@ -62,7 +61,6 @@ class ServerService {
   // PC → PHONE
   // ============================
 
-  /// GET /files
   Response _handleFileList(Request request) {
     return Response.ok(
       jsonEncode(_sharedFiles.keys.toList()),
@@ -70,7 +68,6 @@ class ServerService {
     );
   }
 
-  /// GET /files/<name>
   Future<Response> _handleFileDownload(Request request, String name) async {
     final file = _sharedFiles[name];
 
@@ -94,7 +91,6 @@ class ServerService {
   // PHONE → PC
   // ============================
 
-  /// POST /upload (multipart/form-data)
   Future<Response> _handleUpload(Request request) async {
     final contentType = request.headers['content-type'];
 
@@ -129,7 +125,6 @@ class ServerService {
   // NETWORK
   // ============================
 
-  /// Get local IPv4
   Future<String> _getLocalIp() async {
     for (final iface in await NetworkInterface.list()) {
       for (final addr in iface.addresses) {
@@ -144,5 +139,21 @@ class ServerService {
   List<File> getReceivedFiles() {
     if (!_receivedDir.existsSync()) return [];
     return _receivedDir.listSync().whereType<File>().toList();
+  }
+
+  // ============================
+  // DESKTOP DOWNLOADS LOCATION
+  // ============================
+
+  Directory _getDesktopReceiveDir() {
+    final home =
+        Platform.environment['HOME'] ??
+        Platform.environment['USERPROFILE']; // Windows
+
+    if (home == null) {
+      return Directory('received'); // fallback
+    }
+
+    return Directory('$home/Downloads/UniShare');
   }
 }
