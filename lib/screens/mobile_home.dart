@@ -25,6 +25,8 @@ class _MobileHomeState extends State<MobileHome> {
   ConnectionStateStatus status = ConnectionStateStatus.scanning;
   ConnectedView connectedView = ConnectedView.menu;
 
+  bool showScanner = false; // ⭐ NEW
+
   Timer? _pingTimer;
   Timer? _filePollTimer;
 
@@ -60,6 +62,31 @@ class _MobileHomeState extends State<MobileHome> {
 
   // ---------- SCAN ----------
   Widget _buildScanner() {
+    if (!showScanner) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.qr_code_scanner, size: 72),
+            const SizedBox(height: 20),
+            const Text(
+              'Connect to Desktop',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: () {
+                setState(() {
+                  showScanner = true;
+                });
+              },
+              child: const Text('Start Scanning'),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Column(
       children: [
         const Padding(
@@ -239,6 +266,7 @@ class _MobileHomeState extends State<MobileHome> {
             onPressed: () {
               setState(() {
                 status = ConnectionStateStatus.scanning;
+                showScanner = false; // ⭐ RESET
               });
             },
             child: const Text('Scan Again'),
@@ -314,6 +342,7 @@ class _MobileHomeState extends State<MobileHome> {
     setState(() {
       status = ConnectionStateStatus.failed;
       _availableFiles.clear();
+      showScanner = false; // ⭐ RESET
     });
   }
 
@@ -326,6 +355,7 @@ class _MobileHomeState extends State<MobileHome> {
       serverUrl = null;
       connectedView = ConnectedView.menu;
       _availableFiles.clear();
+      showScanner = false; // ⭐ RESET
     });
   }
 }
