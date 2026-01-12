@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:file_picker/file_picker.dart';
+
 import '../services/http_client_service.dart';
 
 class MobileHome extends StatefulWidget {
@@ -12,17 +16,9 @@ class MobileHome extends StatefulWidget {
   State<MobileHome> createState() => _MobileHomeState();
 }
 
-enum ConnectionStateStatus {
-  scanning,
-  connecting,
-  connected,
-  failed,
-}
+enum ConnectionStateStatus { scanning, connecting, connected, failed }
 
-enum ConnectedView {
-  menu,
-  receive,
-}
+enum ConnectedView { menu, receive }
 
 class _MobileHomeState extends State<MobileHome> {
   String? serverUrl;
@@ -77,9 +73,7 @@ class _MobileHomeState extends State<MobileHome> {
           child: MobileScanner(
             onDetect: (capture) {
               final code = capture.barcodes.first.rawValue;
-              if (code != null) {
-                _onQrScanned(code);
-              }
+              if (code != null) _onQrScanned(code);
             },
           ),
         ),
@@ -92,7 +86,6 @@ class _MobileHomeState extends State<MobileHome> {
       serverUrl = url;
       status = ConnectionStateStatus.connecting;
     });
-
     _checkConnection();
   }
 
@@ -112,14 +105,12 @@ class _MobileHomeState extends State<MobileHome> {
 
   // ---------- CONNECTED ----------
   Widget _buildConnected() {
-    if (connectedView == ConnectedView.menu) {
-      return _buildConnectedMenu();
-    } else {
-      return _buildReceiveView();
-    }
+    return connectedView == ConnectedView.menu
+        ? _buildConnectedMenu()
+        : _buildReceiveView();
   }
 
-  // ---------- MENU (your drawing) ----------
+  // ---------- MENU ----------
   Widget _buildConnectedMenu() {
     return Center(
       child: Column(
@@ -130,13 +121,38 @@ class _MobileHomeState extends State<MobileHome> {
             child: const Text('Close Connection'),
           ),
           const SizedBox(height: 40),
+
+          // SEND (Phone → PC)
           FilledButton(
-            onPressed: () {
-              // Future: Phone → PC
+            onPressed: () async {
+              try {
+                final result = await FilePicker.platform.pickFiles();
+                if (result == null || result.files.first.path == null) return;
+
+                final file = File(result.files.first.path!);
+
+                _pauseHeartbeat();
+                await HttpClientService.uploadFile(serverUrl!, file);
+                _resumeHeartbeat();
+
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('File sent to PC')),
+                );
+              } catch (_) {
+                _resumeHeartbeat();
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Failed to send file')),
+                );
+              }
             },
             child: const Text('Send'),
           ),
+
           const SizedBox(height: 16),
+
+          // RECEIVE (PC → Phone)
           FilledButton(
             onPressed: () {
               setState(() {
@@ -177,7 +193,6 @@ class _MobileHomeState extends State<MobileHome> {
                   itemCount: _availableFiles.length,
                   itemBuilder: (context, index) {
                     final fileName = _availableFiles[index];
-
                     return ListTile(
                       leading: const Icon(Icons.insert_drive_file),
                       title: Text(fileName),
@@ -194,7 +209,6 @@ class _MobileHomeState extends State<MobileHome> {
                           );
 
                           if (!mounted) return;
-
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('$fileName downloaded')),
                           );
@@ -237,11 +251,11 @@ class _MobileHomeState extends State<MobileHome> {
   // ---------- NETWORK ----------
   Future<void> _checkConnection() async {
     try {
-      final uri = Uri.parse('$serverUrl/ping');
-      final response =
-          await http.get(uri).timeout(const Duration(seconds: 4));
+      final res = await http
+          .get(Uri.parse('$serverUrl/ping'))
+          .timeout(const Duration(seconds: 4));
 
-      if (response.statusCode == 200) {
+      if (res.statusCode == 200) {
         setState(() {
           status = ConnectionStateStatus.connected;
           connectedView = ConnectedView.menu;
@@ -271,13 +285,20 @@ class _MobileHomeState extends State<MobileHome> {
     });
   }
 
+  void _pauseHeartbeat() {
+    _pingTimer?.cancel();
+  }
+
+  void _resumeHeartbeat() {
+    _startHeartbeat();
+  }
+
   void _startFilePolling() {
     _filePollTimer?.cancel();
     _filePollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       try {
         final files = await HttpClientService.getFiles(serverUrl!);
         if (!mounted) return;
-
         setState(() {
           _availableFiles = files;
         });

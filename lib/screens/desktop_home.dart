@@ -27,8 +27,8 @@ class _DesktopHomeState extends State<DesktopHome> {
         child: isServerRunning
             ? _buildMainLayout()
             : isLoading
-                ? const CircularProgressIndicator()
-                : _buildStartView(),
+            ? const CircularProgressIndicator()
+            : _buildStartView(),
       ),
     );
   }
@@ -89,24 +89,19 @@ class _DesktopHomeState extends State<DesktopHome> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 FilledButton.icon(
-  onPressed: _pickAndShareFile,
-  icon: const Icon(Icons.upload),
-  label: const Text('Send'),
-  style: FilledButton.styleFrom(
-    minimumSize: const Size(160, 48),
-  ),
-),
+                  onPressed: _pickAndShareFile,
+                  icon: const Icon(Icons.upload),
+                  label: const Text('Send'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(160, 48),
+                  ),
+                ),
 
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
-                  onPressed: () {
-                    // TODO: Show received files later
-                  },
+                  onPressed: _showReceivedFiles,
                   icon: const Icon(Icons.download),
                   label: const Text('Receive'),
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(160, 48),
-                  ),
                 ),
               ],
             ),
@@ -140,22 +135,75 @@ class _DesktopHomeState extends State<DesktopHome> {
       connectionUrl = null;
     });
   }
+
   Future<void> _pickAndShareFile() async {
-  final result = await FilePicker.platform.pickFiles();
+    final result = await FilePicker.platform.pickFiles();
 
-  if (result == null || result.files.isEmpty) return;
+    if (result == null || result.files.isEmpty) return;
 
-  final pickedFile = result.files.first;
+    final pickedFile = result.files.first;
 
-  if (pickedFile.path == null) return;
+    if (pickedFile.path == null) return;
 
-  final file = File(pickedFile.path!);
+    final file = File(pickedFile.path!);
 
-  _serverService.addFile(file);
+    _serverService.addFile(file);
 
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('${pickedFile.name} ready to send')),
-  );
-}
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('${pickedFile.name} ready to send')));
+  }
 
+  void _showReceivedFiles() {
+    final files = _serverService.getReceivedFiles();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Received Files'),
+          content: SizedBox(
+            width: 400,
+            height: 300,
+            child: files.isEmpty
+                ? const Center(child: Text('No files received yet'))
+                : ListView.builder(
+                    itemCount: files.length,
+                    itemBuilder: (context, index) {
+                      final file = files[index];
+                      final name = file.path.split(Platform.pathSeparator).last;
+
+                      return ListTile(
+                        leading: const Icon(Icons.insert_drive_file),
+                        title: Text(name),
+                        subtitle: Text(
+                          '${(file.lengthSync() / 1024).toStringAsFixed(1)} KB',
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.folder_open),
+                          onPressed: () {
+                            Process.start(
+                              Platform.isWindows
+                                  ? 'explorer'
+                                  : Platform.isMacOS
+                                  ? 'open'
+                                  : 'xdg-open',
+                              [file.parent.path],
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

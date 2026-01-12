@@ -1,8 +1,12 @@
 import 'dart:io';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 class HttpClientService {
+  // =========================
+  // PC → PHONE
+  // =========================
+
   static Future<List<String>> getFiles(String baseUrl) async {
     final res = await http.get(Uri.parse('$baseUrl/files'));
 
@@ -27,5 +31,29 @@ class HttpClientService {
 
     final file = File(savePath);
     await file.writeAsBytes(res.bodyBytes);
+  }
+
+  // =========================
+  // PHONE → PC  (NEW)
+  // =========================
+
+  static Future<void> uploadFile(String baseUrl, File file) async {
+    final uri = Uri.parse('$baseUrl/upload');
+
+    final request = http.MultipartRequest('POST', uri);
+
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'file', // field name
+        file.path,
+        filename: file.path.split('/').last,
+      ),
+    );
+
+    final response = await request.send();
+
+    if (response.statusCode != 200) {
+      throw Exception('Upload failed (${response.statusCode})');
+    }
   }
 }
