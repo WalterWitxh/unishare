@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 
 import '../services/http_client_service.dart';
@@ -25,7 +24,7 @@ class _MobileHomeState extends State<MobileHome> {
   ConnectionStateStatus status = ConnectionStateStatus.scanning;
   ConnectedView connectedView = ConnectedView.menu;
 
-  bool showScanner = false; // ⭐ NEW
+  bool showScanner = false;
 
   Timer? _pingTimer;
   Timer? _filePollTimer;
@@ -220,14 +219,14 @@ class _MobileHomeState extends State<MobileHome> {
                   itemCount: _availableFiles.length,
                   itemBuilder: (context, index) {
                     final fileName = _availableFiles[index];
+
                     return ListTile(
                       leading: const Icon(Icons.insert_drive_file),
                       title: Text(fileName),
                       trailing: IconButton(
                         icon: const Icon(Icons.download),
                         onPressed: () async {
-                          final dir = await getApplicationDocumentsDirectory();
-                          final savePath = '${dir.path}/$fileName';
+                          final savePath = await _getDownloadPath(fileName);
 
                           await HttpClientService.downloadFile(
                             serverUrl!,
@@ -237,7 +236,11 @@ class _MobileHomeState extends State<MobileHome> {
 
                           if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('$fileName downloaded')),
+                            SnackBar(
+                              content: Text(
+                                '$fileName saved to Downloads/UniShare',
+                              ),
+                            ),
                           );
                         },
                       ),
@@ -266,7 +269,7 @@ class _MobileHomeState extends State<MobileHome> {
             onPressed: () {
               setState(() {
                 status = ConnectionStateStatus.scanning;
-                showScanner = false; // ⭐ RESET
+                showScanner = false;
               });
             },
             child: const Text('Scan Again'),
@@ -342,7 +345,7 @@ class _MobileHomeState extends State<MobileHome> {
     setState(() {
       status = ConnectionStateStatus.failed;
       _availableFiles.clear();
-      showScanner = false; // ⭐ RESET
+      showScanner = false;
     });
   }
 
@@ -355,7 +358,18 @@ class _MobileHomeState extends State<MobileHome> {
       serverUrl = null;
       connectedView = ConnectedView.menu;
       _availableFiles.clear();
-      showScanner = false; // ⭐ RESET
+      showScanner = false;
     });
+  }
+
+  // ---------- DOWNLOAD PATH ----------
+  Future<String> _getDownloadPath(String fileName) async {
+    final dir = Directory('/storage/emulated/0/Download/UniShare');
+
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+
+    return '${dir.path}/$fileName';
   }
 }
