@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../widgets/qr_code_display.dart';
 import '../services/server_service.dart';
+import '../services/http_client_service.dart';
 
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
@@ -155,55 +156,73 @@ class _DesktopHomeState extends State<DesktopHome> {
   }
 
   void _showReceivedFiles() {
-    final files = _serverService.getReceivedFiles();
+  showDialog(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: const Text('Incoming Files'),
+        content: SizedBox(
+          width: 400,
+          height: 300,
+          child: FutureBuilder<List<String>>(
+            future: HttpClientService.getIncomingFiles(connectionUrl!),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Received Files'),
-          content: SizedBox(
-            width: 400,
-            height: 300,
-            child: files.isEmpty
-                ? const Center(child: Text('No files received yet'))
-                : ListView.builder(
-                    itemCount: files.length,
-                    itemBuilder: (context, index) {
-                      final file = files[index];
-                      final name = file.path.split(Platform.pathSeparator).last;
+              if (snapshot.hasError) {
+                return const Center(child: Text('Connection lost'));
+              }
 
-                      return ListTile(
-                        leading: const Icon(Icons.insert_drive_file),
-                        title: Text(name),
-                        subtitle: Text(
-                          '${(file.lengthSync() / 1024).toStringAsFixed(1)} KB',
-                        ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.folder_open),
-                          onPressed: () {
-                            Process.start(
-                              Platform.isWindows
-                                  ? 'explorer'
-                                  : Platform.isMacOS
-                                  ? 'open'
-                                  : 'xdg-open',
-                              [file.parent.path],
-                            );
-                          },
-                        ),
-                      );
-                    },
-                  ),
+              final files = snapshot.data ?? [];
+
+              if (files.isEmpty) {
+                return const Center(child: Text('No incoming files'));
+              }
+
+              return ListView.builder(
+                itemCount: files.length,
+                itemBuilder: (context, index) {
+                  final fileName = files[index];
+
+                  return ListTile(
+                    leading: const Icon(Icons.insert_drive_file),
+                    title: Text(fileName),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.download),
+                      onPressed: () async {
+                        final dir = _serverService.getReceiveDir();
+                        final savePath = '${dir.path}/$fileName';
+
+                        await HttpClientService.downloadIncoming(
+                          connectionUrl!,
+                          fileName,
+                          savePath,
+                        );
+
+                        if (!context.mounted) return;
+
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('$fileName saved')),
+                        );
+                      },
+                    ),
+                  );
+                },
+              );
+            },
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        );
-      },
-    );
-  }
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
 }

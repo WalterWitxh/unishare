@@ -56,4 +56,36 @@ class HttpClientService {
       throw Exception('Upload failed (${response.statusCode})');
     }
   }
+
+ // =========================
+// PHONE → PC (Incoming queue)
+// =========================
+
+static Future<List<String>> getIncomingFiles(String baseUrl) async {
+  final res = await http.get(Uri.parse('$baseUrl/incoming'));
+
+  if (res.statusCode != 200) {
+    throw Exception('Failed to fetch incoming files');
+  }
+
+  final data = jsonDecode(res.body) as List;
+  return data.map((e) => e.toString()).toList();
+}
+
+static Future<void> downloadIncoming(
+  String baseUrl,
+  String fileName,
+  String savePath,
+) async {
+  final res = await http.get(Uri.parse('$baseUrl/incoming/$fileName'));
+
+  if (res.statusCode != 200) {
+    throw Exception('Download failed');
+  }
+
+  final file = File(savePath);
+  await file.writeAsBytes(res.bodyBytes);
+}
+
+
 }
