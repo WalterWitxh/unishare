@@ -15,8 +15,8 @@ class ServerService {
   // PC → Phone
   final Map<String, File> _sharedFiles = {};
 
-  // Phone → PC (incoming queue)
-  final Map<String, List<int>> _incomingFiles = {};
+  // Phone → PC (saved files)
+  late Directory _receiveDir;
 
   Future<void> start() async {
     final router = Router();
@@ -29,25 +29,27 @@ class ServerService {
 
     // Phone → PC
     router.post('/upload', _handleUpload);
-    router.get('/incoming', _handleIncomingList);
-    router.get('/incoming/<name>', _handleIncomingDownload);
+
+    _receiveDir = _getReceiveDir();
+    if (!await _receiveDir.exists()) {
+      await _receiveDir.create(recursive: true);
+    }
 
     ip = await _getLocalIp();
     port = 52343;
 
     _server = await shelf_io.serve(router, InternetAddress.anyIPv4, port);
+
     print('Server running at http://$ip:$port');
+    print('📁 Saving received files to: ${_receiveDir.path}');
   }
 
   Future<void> stop() async {
     await _server?.close(force: true);
     _sharedFiles.clear();
-    _incomingFiles.clear();
   }
 
-  // ============================
-  // PC → PHONE
-  // ============================
+  // ================= PC → PHONE =================
 
   void addFile(File file) {
     final name = path.basename(file.path);
@@ -79,9 +81,7 @@ class ServerService {
     );
   }
 
-  // ============================
-  // PHONE → PC (INCOMING QUEUE)
-  // ============================
+  // ================= PHONE → PC =================
 
   Future<Response> _handleUpload(Request request) async {
     final contentType = request.headers['content-type'];
@@ -100,41 +100,19 @@ class ServerService {
       if (match == null) continue;
 
       final filename = match.group(1)!;
-      final bytes = await part.fold<List<int>>([], (a, b) => a..addAll(b));
+      final file = File(path.join(_receiveDir.path, filename));
 
-      _incomingFiles[filename] = bytes;
+      final sink = file.openWrite();
+      await part.pipe(sink);
+      await sink.close();
 
-      print('📥 Incoming file: $filename');
+      print('📥 Received from phone: ${file.path}');
     }
 
-    return Response.ok('Queued');
+    return Response.ok('Saved');
   }
 
-  Response _handleIncomingList(Request request) {
-    return Response.ok(
-      jsonEncode(_incomingFiles.keys.toList()),
-      headers: {'content-type': 'application/json'},
-    );
-  }
-
-  Response _handleIncomingDownload(Request request, String name) {
-    final bytes = _incomingFiles[name];
-    if (bytes == null) return Response.notFound('Not found');
-
-    _incomingFiles.remove(name);
-
-    return Response.ok(
-      Stream.fromIterable([bytes]),
-      headers: {
-        'content-type': 'application/octet-stream',
-        'content-disposition': 'attachment; filename="$name"',
-      },
-    );
-  }
-
-  // ============================
-  // NETWORK
-  // ============================
+  // ================= UTIL =================
 
   Future<String> _getLocalIp() async {
     for (final iface in await NetworkInterface.list()) {
@@ -146,15 +124,20 @@ class ServerService {
     }
     return '127.0.0.1';
   }
-  Directory getReceiveDir() {
-  final home =
-      Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
 
-  if (home == null) {
-    return Directory('received');
+  Directory _getReceiveDir() {
+    final home =
+        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+
+    if (home == null) {
+      return Directory('received');
+    }
+
+    return Directory('$home/Downloads/UniShare');
   }
 
-  return Directory('$home/Downloads/UniShare');
-}
-
+  List<File> getReceivedFiles() {
+    if (!_receiveDir.existsSync()) return [];
+    return _receiveDir.listSync().whereType<File>().toList();
+  }
 }
