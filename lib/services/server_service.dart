@@ -5,7 +5,6 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:mime/mime.dart';
-import 'package:http_parser/http_parser.dart';
 
 class ServerService {
   HttpServer? _server;
@@ -115,14 +114,73 @@ class ServerService {
   // ================= UTIL =================
 
   Future<String> _getLocalIp() async {
-    for (final iface in await NetworkInterface.list()) {
+    final interfaces = await NetworkInterface.list(
+      includeLoopback: false,
+      type: InternetAddressType.IPv4,
+    );
+
+    if (interfaces.isEmpty) {
+      return '127.0.0.1';
+    }
+
+    // Windows network interface names
+    final windowsWifiNames = ['wi-fi', 'wifi', 'wlan', 'wireless'];
+    final windowsEthernetNames = ['ethernet', 'local area connection'];
+
+    // Linux network interface names
+    final linuxWifiNames = ['wlan', 'wl', 'wifi'];
+    final linuxEthernetNames = ['eth', 'enp', 'eno', 'ens'];
+
+    // Priority order: Wi-Fi > Ethernet > Others
+    // Check for Wi-Fi interfaces first
+    for (final iface in interfaces) {
+      final nameLower = iface.name.toLowerCase();
+
+      // Check if it's a Wi-Fi interface
+      final isWifi =
+          windowsWifiNames.any((pattern) => nameLower.contains(pattern)) ||
+          linuxWifiNames.any((pattern) => nameLower.contains(pattern));
+
+      if (isWifi && iface.addresses.isNotEmpty) {
+        // Skip link-local addresses (169.254.x.x)
+        for (final addr in iface.addresses) {
+          if (!addr.address.startsWith('169.254.')) {
+            return addr.address;
+          }
+        }
+      }
+    }
+
+    // Check for Ethernet interfaces
+    for (final iface in interfaces) {
+      final nameLower = iface.name.toLowerCase();
+
+      final isEthernet =
+          windowsEthernetNames.any((pattern) => nameLower.contains(pattern)) ||
+          linuxEthernetNames.any((pattern) => nameLower.contains(pattern));
+
+      if (isEthernet && iface.addresses.isNotEmpty) {
+        // Skip link-local addresses (169.254.x.x)
+        for (final addr in iface.addresses) {
+          if (!addr.address.startsWith('169.254.')) {
+            return addr.address;
+          }
+        }
+      }
+    }
+
+    // Fallback: Use first non-link-local address
+    for (final iface in interfaces) {
       for (final addr in iface.addresses) {
-        if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+        if (!addr.address.startsWith('169.254.') &&
+            !addr.address.startsWith('127.')) {
           return addr.address;
         }
       }
     }
-    return '127.0.0.1';
+
+    // Last resort: first available address
+    return interfaces.first.addresses.first.address;
   }
 
   Directory _getReceiveDir() {
