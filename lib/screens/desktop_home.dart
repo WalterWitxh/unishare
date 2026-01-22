@@ -1,10 +1,11 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 
 import 'package:flutter/material.dart';
 import '../widgets/qr_code_display.dart';
 import '../services/server_service.dart';
-import '../services/http_client_service.dart';
+// http client not needed in this file
 
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
@@ -17,7 +18,10 @@ class _DesktopHomeState extends State<DesktopHome> {
   bool isServerRunning = false;
   bool isLoading = false;
 
+  bool isConnected = false;
+
   final ServerService _serverService = ServerService();
+  StreamSubscription<bool>? _connSub;
   String? connectionUrl;
 
   @override
@@ -66,9 +70,9 @@ class _DesktopHomeState extends State<DesktopHome> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Text(
-                  'Scan QR on Mobile',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                Text(
+                  isConnected ? 'Connected' : 'Scan QR on Mobile',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 12),
                 QrCodeDisplay(data: connectionUrl!),
@@ -120,6 +124,13 @@ class _DesktopHomeState extends State<DesktopHome> {
 
     await _serverService.start();
 
+    // Subscribe to connection events from server (mobile pings)
+    _connSub = _serverService.connectionStream.listen((connected) {
+      setState(() {
+        isConnected = connected;
+      });
+    });
+
     setState(() {
       connectionUrl = 'http://${_serverService.ip}:${_serverService.port}';
       isServerRunning = true;
@@ -130,6 +141,9 @@ class _DesktopHomeState extends State<DesktopHome> {
   /// Stop HTTP server
   Future<void> _stopServer() async {
     await _serverService.stop();
+
+    _connSub?.cancel();
+    _connSub = null;
 
     setState(() {
       isServerRunning = false;
@@ -207,6 +221,12 @@ class _DesktopHomeState extends State<DesktopHome> {
     },
   );
 }
+
+  @override
+  void dispose() {
+    _connSub?.cancel();
+    super.dispose();
+  }
 
 
 }

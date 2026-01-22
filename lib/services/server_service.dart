@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart';
@@ -11,6 +12,12 @@ class ServerService {
   late String ip;
   late int port;
 
+  // Connection tracking (mobile ↔ desktop)
+  final StreamController<bool> _connectionController = StreamController<bool>.broadcast();
+  bool _isConnected = false;
+  Timer? _disconnectTimer;
+  Duration _disconnectTimeout = const Duration(seconds: 5);
+
   // PC → Phone
   final Map<String, File> _sharedFiles = {};
 
@@ -20,7 +27,7 @@ class ServerService {
   Future<void> start() async {
     final router = Router();
 
-    router.get('/ping', (_) => Response.ok('OK'));
+    router.get('/ping', _handlePing);
 
     // PC → Phone
     router.get('/files', _handleFileList);
@@ -46,6 +53,10 @@ class ServerService {
   Future<void> stop() async {
     await _server?.close(force: true);
     _sharedFiles.clear();
+    _disconnectTimer?.cancel();
+    try {
+      _connectionController.close();
+    } catch (_) {}
   }
 
   // ================= PC → PHONE =================
@@ -106,9 +117,32 @@ class ServerService {
       await sink.close();
 
       print('📥 Received from phone: ${file.path}');
+      // Each upload also counts as a ping (active connection)
+      _onPing();
     }
 
     return Response.ok('Saved');
+  }
+
+  // Handle ping from mobile to indicate an active connection
+  Response _handlePing(Request request) {
+    _onPing();
+    return Response.ok('OK');
+  }
+
+  void _onPing() {
+    // Reset disconnect timer on each ping
+    _disconnectTimer?.cancel();
+
+    if (!_isConnected) {
+      _isConnected = true;
+      _connectionController.add(true);
+    }
+
+    _disconnectTimer = Timer(_disconnectTimeout, () {
+      _isConnected = false;
+      _connectionController.add(false);
+    });
   }
 
   // ================= UTIL =================
@@ -199,4 +233,7 @@ class ServerService {
     if (!_receiveDir.existsSync()) return [];
     return _receiveDir.listSync().whereType<File>().toList();
   }
+
+  // Expose connection stream so UI can react to mobile connect/disconnect
+  Stream<bool> get connectionStream => _connectionController.stream;
 }
