@@ -184,14 +184,15 @@ class ServerService {
   }
 
   Directory _getReceiveDir() {
-    final home =
-        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+    final userProfile = Platform.environment['USERPROFILE'];
 
-    if (home == null) {
+    if (userProfile == null) {
       return Directory('received');
     }
 
-    return Directory('$home/Downloads/UniShare');
+    // Use path.join for proper path handling
+    final downloadsPath = path.join(userProfile, 'Downloads', 'UniShare');
+    return Directory(downloadsPath);
   }
 
   List<File> getReceivedFiles() {
