@@ -327,6 +327,11 @@ class _MobileHomeState extends State<MobileHome> {
           .timeout(const Duration(seconds: 4));
 
       if (res.statusCode == 200) {
+        // show a success tick, then go to connected menu
+        if (!mounted) return;
+        await _showConnectionSuccess();
+
+        if (!mounted) return;
         setState(() {
           status = ConnectionStateStatus.connected;
           connectedView = ConnectedView.menu;
@@ -339,6 +344,48 @@ class _MobileHomeState extends State<MobileHome> {
       }
     } catch (_) {
       _failConnection();
+    }
+  }
+
+  Future<void> _showConnectionSuccess() async {
+    if (!mounted) return;
+    // show a simple dialog without animation, visible for 900ms
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black54,
+      transitionDuration: Duration.zero,
+      pageBuilder: (context, a1, a2) {
+        return Center(
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              width: 96,
+              height: 96,
+              decoration: const BoxDecoration(
+                color: Colors.green,
+                shape: BoxShape.circle,
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.check,
+                  size: 48,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, a1, a2, child) => child,
+    );
+
+    // keep dialog visible briefly (900ms)
+    await Future.delayed(const Duration(milliseconds: 900));
+    if (mounted) {
+      try {
+        Navigator.of(context, rootNavigator: true).pop();
+      } catch (_) {}
     }
   }
 
