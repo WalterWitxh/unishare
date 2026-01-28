@@ -41,7 +41,17 @@ class _MobileHomeState extends State<MobileHome> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('UniShare – Mobile')),
+      appBar: AppBar(
+        title: const Text('UniShare – Mobile'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Download history',
+            onPressed: _showHistory,
+          ),
+        ],
+      ),
+
       body: _buildBody(),
     );
   }
@@ -74,11 +84,7 @@ class _MobileHomeState extends State<MobileHome> {
             ),
             const SizedBox(height: 24),
             FilledButton(
-              onPressed: () {
-                setState(() {
-                  showScanner = true;
-                });
-              },
+              onPressed: () => setState(() => showScanner = true),
               child: const Text('Start Scanning'),
             ),
           ],
@@ -86,64 +92,11 @@ class _MobileHomeState extends State<MobileHome> {
       );
     }
 
-    return Stack(
-      children: [
-        // Camera
-        MobileScanner(
-          onDetect: (capture) {
-            final code = capture.barcodes.first.rawValue;
-            if (code != null) _onQrScanned(code);
-          },
-        ),
-
-        // Dark overlay
-        Container(color: Colors.black.withOpacity(0.6)),
-
-        // Scan box
-        Center(
-          child: Container(
-            width: 260,
-            height: 260,
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: const Color.fromARGB(255, 78, 175, 255),
-                width: 3,
-              ),
-              borderRadius: BorderRadius.circular(16),
-            ),
-          ),
-        ),
-
-        // Instruction text
-        Positioned(
-          bottom: 120,
-          left: 0,
-          right: 0,
-          child: const Text(
-            'Align QR code inside the box',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ),
-
-        // Back button
-        Positioned(
-          top: 40,
-          left: 16,
-          child: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () {
-              setState(() {
-                showScanner = false;
-              });
-            },
-          ),
-        ),
-      ],
+    return MobileScanner(
+      onDetect: (capture) {
+        final code = capture.barcodes.first.rawValue;
+        if (code != null) _onQrScanned(code);
+      },
     );
   }
 
@@ -151,6 +104,7 @@ class _MobileHomeState extends State<MobileHome> {
     setState(() {
       serverUrl = url;
       status = ConnectionStateStatus.connecting;
+      showScanner = false;
     });
     _checkConnection();
   }
@@ -188,37 +142,10 @@ class _MobileHomeState extends State<MobileHome> {
           ),
           const SizedBox(height: 40),
 
-          // SEND (Phone → PC)
-          FilledButton(
-            onPressed: () async {
-              try {
-                final result = await FilePicker.platform.pickFiles();
-                if (result == null || result.files.first.path == null) return;
-
-                final file = File(result.files.first.path!);
-
-                _pauseHeartbeat();
-                await HttpClientService.uploadFile(serverUrl!, file);
-                _resumeHeartbeat();
-
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('File sent to PC')),
-                );
-              } catch (_) {
-                _resumeHeartbeat();
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Failed to send file')),
-                );
-              }
-            },
-            child: const Text('Send'),
-          ),
+          FilledButton(onPressed: _sendFile, child: const Text('Send')),
 
           const SizedBox(height: 16),
 
-          // RECEIVE (PC → Phone)
           FilledButton(
             onPressed: () {
               setState(() {
@@ -249,25 +176,19 @@ class _MobileHomeState extends State<MobileHome> {
         ),
         Expanded(
           child: _availableFiles.isEmpty
-              ? const Center(
-                  child: Text(
-                    'Waiting for desktop files...',
-                    textAlign: TextAlign.center,
-                  ),
-                )
+              ? const Center(child: Text('Waiting for desktop files...'))
               : ListView.builder(
                   itemCount: _availableFiles.length,
                   itemBuilder: (context, index) {
                     final fileName = _availableFiles[index];
-
                     return ListTile(
                       leading: const Icon(Icons.insert_drive_file),
                       title: Text(fileName),
                       trailing: IconButton(
                         icon: const Icon(Icons.download),
                         onPressed: () async {
-                          final savePath = await _getDownloadPath(fileName);
-
+                          final savePath =
+                              await HttpClientService.getDownloadPath(fileName);
                           await HttpClientService.downloadFile(
                             serverUrl!,
                             fileName,
@@ -276,11 +197,7 @@ class _MobileHomeState extends State<MobileHome> {
 
                           if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                '$fileName saved to Downloads/UniShare',
-                              ),
-                            ),
+                            SnackBar(content: Text('$fileName saved')),
                           );
                         },
                       ),
@@ -300,16 +217,12 @@ class _MobileHomeState extends State<MobileHome> {
         children: [
           const Icon(Icons.error, color: Colors.red, size: 72),
           const SizedBox(height: 16),
-          const Text(
-            'Connection Failed',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
+          const Text('Connection Failed'),
           const SizedBox(height: 16),
           FilledButton(
             onPressed: () {
               setState(() {
                 status = ConnectionStateStatus.scanning;
-                showScanner = false;
               });
             },
             child: const Text('Scan Again'),
@@ -327,16 +240,9 @@ class _MobileHomeState extends State<MobileHome> {
           .timeout(const Duration(seconds: 4));
 
       if (res.statusCode == 200) {
-        // show a success tick, then go to connected menu
-        if (!mounted) return;
-        await _showConnectionSuccess();
-
-        if (!mounted) return;
         setState(() {
           status = ConnectionStateStatus.connected;
-          connectedView = ConnectedView.menu;
         });
-
         _startHeartbeat();
         _startFilePolling();
       } else {
@@ -347,68 +253,16 @@ class _MobileHomeState extends State<MobileHome> {
     }
   }
 
-  Future<void> _showConnectionSuccess() async {
-    if (!mounted) return;
-    // show a simple dialog without animation, visible for 900ms
-    showGeneralDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black54,
-      transitionDuration: Duration.zero,
-      pageBuilder: (context, a1, a2) {
-        return Center(
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              width: 96,
-              height: 96,
-              decoration: const BoxDecoration(
-                color: Colors.green,
-                shape: BoxShape.circle,
-              ),
-              child: const Center(
-                child: Icon(
-                  Icons.check,
-                  size: 48,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-      transitionBuilder: (context, a1, a2, child) => child,
-    );
-
-    // keep dialog visible briefly (900ms)
-    await Future.delayed(const Duration(milliseconds: 900));
-    if (mounted) {
-      try {
-        Navigator.of(context, rootNavigator: true).pop();
-      } catch (_) {}
-    }
-  }
-
   void _startHeartbeat() {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       try {
-        final res = await http
-            .get(Uri.parse('$serverUrl/ping'))
-            .timeout(const Duration(seconds: 3));
+        final res = await http.get(Uri.parse('$serverUrl/ping'));
         if (res.statusCode != 200) _failConnection();
       } catch (_) {
         _failConnection();
       }
     });
-  }
-
-  void _pauseHeartbeat() {
-    _pingTimer?.cancel();
-  }
-
-  void _resumeHeartbeat() {
-    _startHeartbeat();
   }
 
   void _startFilePolling() {
@@ -417,9 +271,7 @@ class _MobileHomeState extends State<MobileHome> {
       try {
         final files = await HttpClientService.getFiles(serverUrl!);
         if (!mounted) return;
-        setState(() {
-          _availableFiles = files;
-        });
+        setState(() => _availableFiles = files);
       } catch (_) {}
     });
   }
@@ -432,31 +284,71 @@ class _MobileHomeState extends State<MobileHome> {
     setState(() {
       status = ConnectionStateStatus.failed;
       _availableFiles.clear();
-      showScanner = false;
     });
   }
 
   void _disconnect() {
     _pingTimer?.cancel();
     _filePollTimer?.cancel();
-
     setState(() {
       status = ConnectionStateStatus.scanning;
       serverUrl = null;
       connectedView = ConnectedView.menu;
       _availableFiles.clear();
-      showScanner = false;
     });
   }
 
-  // ---------- DOWNLOAD PATH ----------
-  Future<String> _getDownloadPath(String fileName) async {
-    final dir = Directory('/storage/emulated/0/Download/UniShare');
+  Future<void> _sendFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles();
+      if (result == null || result.files.first.path == null) return;
 
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+      final file = File(result.files.first.path!);
+      await HttpClientService.uploadFile(serverUrl!, file);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('File sent to PC')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Failed to send file')));
     }
+  }
 
-    return '${dir.path}/$fileName';
+  // ---------- HISTORY ----------
+  Future<void> _showHistory() async {
+    final files = await HttpClientService.getLocalHistory();
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Downloaded Files'),
+        content: SizedBox(
+          width: 400,
+          height: 300,
+          child: files.isEmpty
+              ? const Center(child: Text('No downloads yet'))
+              : ListView(
+                  children: files
+                      .map(
+                        (f) => ListTile(
+                          leading: const Icon(Icons.insert_drive_file_outlined),
+                          title: Text(f),
+                        ),
+                      )
+                      .toList(),
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 }

@@ -34,17 +34,16 @@ class HttpClientService {
   }
 
   // =========================
-  // PHONE → PC  (NEW)
+  // PHONE → PC
   // =========================
 
   static Future<void> uploadFile(String baseUrl, File file) async {
     final uri = Uri.parse('$baseUrl/upload');
-
     final request = http.MultipartRequest('POST', uri);
 
     request.files.add(
       await http.MultipartFile.fromPath(
-        'file', // field name
+        'file',
         file.path,
         filename: file.path.split('/').last,
       ),
@@ -53,39 +52,35 @@ class HttpClientService {
     final response = await request.send();
 
     if (response.statusCode != 200) {
-      throw Exception('Upload failed (${response.statusCode})');
+      throw Exception('Upload failed');
     }
   }
 
- // =========================
-// PHONE → PC (Incoming queue)
-// =========================
+  // =========================
+  // LOCAL (PHONE) STORAGE
+  // =========================
 
-static Future<List<String>> getIncomingFiles(String baseUrl) async {
-  final res = await http.get(Uri.parse('$baseUrl/incoming'));
+  /// Download folder path
+  static Future<String> getDownloadPath(String fileName) async {
+    final dir = Directory('/storage/emulated/0/Download/UniShare');
 
-  if (res.statusCode != 200) {
-    throw Exception('Failed to fetch incoming files');
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+
+    return '${dir.path}/$fileName';
   }
 
-  final data = jsonDecode(res.body) as List;
-  return data.map((e) => e.toString()).toList();
-}
+  /// History = already downloaded files
+  static Future<List<String>> getLocalHistory() async {
+    final dir = Directory('/storage/emulated/0/Download/UniShare');
 
-static Future<void> downloadIncoming(
-  String baseUrl,
-  String fileName,
-  String savePath,
-) async {
-  final res = await http.get(Uri.parse('$baseUrl/incoming/$fileName'));
+    if (!await dir.exists()) return [];
 
-  if (res.statusCode != 200) {
-    throw Exception('Download failed');
+    return dir
+        .listSync()
+        .whereType<File>()
+        .map((f) => f.path.split('/').last)
+        .toList();
   }
-
-  final file = File(savePath);
-  await file.writeAsBytes(res.bodyBytes);
-}
-
-
 }
