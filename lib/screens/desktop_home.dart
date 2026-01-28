@@ -1,11 +1,9 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:file_picker/file_picker.dart';
-
 import 'package:flutter/material.dart';
 import '../widgets/qr_code_display.dart';
 import '../services/server_service.dart';
-// http client not needed in this file
 
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
@@ -17,7 +15,6 @@ class DesktopHome extends StatefulWidget {
 class _DesktopHomeState extends State<DesktopHome> {
   bool isServerRunning = false;
   bool isLoading = false;
-
   bool isConnected = false;
 
   final ServerService _serverService = ServerService();
@@ -38,7 +35,6 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  /// Start screen
   Widget _buildStartView() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -59,20 +55,21 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  /// Main layout after server starts
   Widget _buildMainLayout() {
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Row(
         children: [
-          // LEFT SIDE – QR + Stop
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
                   isConnected ? 'Connected' : 'Scan QR on Mobile',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 QrCodeDisplay(data: connectionUrl!),
@@ -85,28 +82,42 @@ class _DesktopHomeState extends State<DesktopHome> {
               ],
             ),
           ),
-
           const VerticalDivider(width: 40),
-
-          // RIGHT SIDE – Actions
           Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Stack(
               children: [
-                FilledButton.icon(
-                  onPressed: _pickAndShareFile,
-                  icon: const Icon(Icons.upload),
-                  label: const Text('Send'),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(160, 48),
+                // HISTORY ICON – top right
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: IconButton(
+                    tooltip: 'Received files history',
+                    icon: const Icon(Icons.history),
+                    onPressed: _showReceivedFiles,
                   ),
                 ),
 
-                const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  onPressed: _showReceivedFiles,
-                  icon: const Icon(Icons.download),
-                  label: const Text('Receive'),
+                // SEND / RECEIVE buttons – centered
+                Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: _pickAndShareFile,
+                        icon: const Icon(Icons.upload),
+                        label: const Text('Send'),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size(160, 48),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        onPressed: _showReceivedFiles,
+                        icon: const Icon(Icons.download),
+                        label: const Text('Receive'),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -116,19 +127,13 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  /// Start HTTP server
   Future<void> _startServer() async {
-    setState(() {
-      isLoading = true;
-    });
+    setState(() => isLoading = true);
 
     await _serverService.start();
 
-    // Subscribe to connection events from server (mobile pings)
     _connSub = _serverService.connectionStream.listen((connected) {
-      setState(() {
-        isConnected = connected;
-      });
+      setState(() => isConnected = connected);
     });
 
     setState(() {
@@ -138,12 +143,9 @@ class _DesktopHomeState extends State<DesktopHome> {
     });
   }
 
-  /// Stop HTTP server
   Future<void> _stopServer() async {
     await _serverService.stop();
-
-    _connSub?.cancel();
-    _connSub = null;
+    await _connSub?.cancel();
 
     setState(() {
       isServerRunning = false;
@@ -153,29 +155,22 @@ class _DesktopHomeState extends State<DesktopHome> {
 
   Future<void> _pickAndShareFile() async {
     final result = await FilePicker.platform.pickFiles();
+    if (result == null || result.files.first.path == null) return;
 
-    if (result == null || result.files.isEmpty) return;
-
-    final pickedFile = result.files.first;
-
-    if (pickedFile.path == null) return;
-
-    final file = File(pickedFile.path!);
-
+    final file = File(result.files.first.path!);
     _serverService.addFile(file);
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('${pickedFile.name} ready to send')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${result.files.first.name} ready to send')),
+    );
   }
 
   void _showReceivedFiles() {
-  final files = _serverService.getReceivedFiles();
+    final files = _serverService.getReceivedFiles();
 
-  showDialog(
-    context: context,
-    builder: (context) {
-      return AlertDialog(
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
         title: const Text('Received Files'),
         content: SizedBox(
           width: 400,
@@ -184,12 +179,10 @@ class _DesktopHomeState extends State<DesktopHome> {
               ? const Center(child: Text('No files received yet'))
               : ListView.builder(
                   itemCount: files.length,
-                  itemBuilder: (context, index) {
-                    final file = files[index];
-                    final name = file.path.split(Platform.pathSeparator).last;
-
+                  itemBuilder: (_, i) {
+                    final file = files[i];
+                    final name = file.uri.pathSegments.last;
                     return ListTile(
-                      leading: const Icon(Icons.insert_drive_file),
                       title: Text(name),
                       subtitle: Text(
                         '${(file.lengthSync() / 1024).toStringAsFixed(1)} KB',
@@ -198,11 +191,7 @@ class _DesktopHomeState extends State<DesktopHome> {
                         icon: const Icon(Icons.folder_open),
                         onPressed: () {
                           Process.start(
-                            Platform.isWindows
-                                ? 'explorer'
-                                : Platform.isMacOS
-                                    ? 'open'
-                                    : 'xdg-open',
+                            Platform.isWindows ? 'explorer' : 'xdg-open',
                             [file.parent.path],
                           );
                         },
@@ -217,16 +206,13 @@ class _DesktopHomeState extends State<DesktopHome> {
             child: const Text('Close'),
           ),
         ],
-      );
-    },
-  );
-}
+      ),
+    );
+  }
 
   @override
   void dispose() {
     _connSub?.cancel();
     super.dispose();
   }
-
-
 }

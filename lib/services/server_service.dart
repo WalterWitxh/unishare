@@ -12,34 +12,30 @@ class ServerService {
   late String ip;
   late int port;
 
-  // Connection tracking (mobile ↔ desktop)
-  final StreamController<bool> _connectionController = StreamController<bool>.broadcast();
+  // Connection tracking
+  final StreamController<bool> _connectionController =
+      StreamController<bool>.broadcast();
   bool _isConnected = false;
   Timer? _disconnectTimer;
-  Duration _disconnectTimeout = const Duration(seconds: 5);
+  final Duration _disconnectTimeout = const Duration(seconds: 5);
 
   // PC → Phone
   final Map<String, File> _sharedFiles = {};
 
-  // Phone → PC (saved files)
-  late Directory _receiveDir;
+  // Phone → PC
+  Directory? _receiveDir;
+
+  // ================= START / STOP =================
 
   Future<void> start() async {
     final router = Router();
 
     router.get('/ping', _handlePing);
-
-    // PC → Phone
     router.get('/files', _handleFileList);
     router.get('/files/<name>', _handleFileDownload);
-
-    // Phone → PC
     router.post('/upload', _handleUpload);
 
-    _receiveDir = _getReceiveDir();
-    if (!await _receiveDir.exists()) {
-      await _receiveDir.create(recursive: true);
-    }
+    _ensureReceiveDir();
 
     ip = await _getLocalIp();
     port = 52343;
@@ -47,16 +43,13 @@ class ServerService {
     _server = await shelf_io.serve(router, InternetAddress.anyIPv4, port);
 
     print('Server running at http://$ip:$port');
-    print('📁 Saving received files to: ${_receiveDir.path}');
+    print('📁 Saving received files to: ${_receiveDir!.path}');
   }
 
   Future<void> stop() async {
     await _server?.close(force: true);
     _sharedFiles.clear();
     _disconnectTimer?.cancel();
-    try {
-      _connectionController.close();
-    } catch (_) {}
   }
 
   // ================= PC → PHONE =================
@@ -94,6 +87,8 @@ class ServerService {
   // ================= PHONE → PC =================
 
   Future<Response> _handleUpload(Request request) async {
+    _ensureReceiveDir();
+
     final contentType = request.headers['content-type'];
     if (contentType == null || !contentType.contains('multipart/form-data')) {
       return Response(400, body: 'Expected multipart/form-data');
@@ -110,28 +105,26 @@ class ServerService {
       if (match == null) continue;
 
       final filename = match.group(1)!;
-      final file = File(path.join(_receiveDir.path, filename));
+      final file = File(path.join(_receiveDir!.path, filename));
 
       final sink = file.openWrite();
       await part.pipe(sink);
       await sink.close();
 
-      print('📥 Received from phone: ${file.path}');
-      // Each upload also counts as a ping (active connection)
       _onPing();
     }
 
     return Response.ok('Saved');
   }
 
-  // Handle ping from mobile to indicate an active connection
+  // ================= CONNECTION =================
+
   Response _handlePing(Request request) {
     _onPing();
     return Response.ok('OK');
   }
 
   void _onPing() {
-    // Reset disconnect timer on each ping
     _disconnectTimer?.cancel();
 
     if (!_isConnected) {
@@ -145,77 +138,30 @@ class ServerService {
     });
   }
 
-  // ================= UTIL =================
+  Stream<bool> get connectionStream => _connectionController.stream;
 
-  Future<String> _getLocalIp() async {
-    final interfaces = await NetworkInterface.list(
-      includeLoopback: false,
-      type: InternetAddressType.IPv4,
-    );
+  // ================= FILE ACCESS =================
 
-    if (interfaces.isEmpty) {
-      return '127.0.0.1';
+  List<File> getReceivedFiles() {
+    _ensureReceiveDir();
+
+    if (!_receiveDir!.existsSync()) {
+      return [];
     }
 
-    // Windows network interface names
-    final windowsWifiNames = ['wi-fi', 'wifi', 'wlan', 'wireless'];
-    final windowsEthernetNames = ['ethernet', 'local area connection'];
-
-    // Linux network interface names
-    final linuxWifiNames = ['wlan', 'wl', 'wifi'];
-    final linuxEthernetNames = ['eth', 'enp', 'eno', 'ens'];
-
-    // Priority order: Wi-Fi > Ethernet > Others
-    // Check for Wi-Fi interfaces first
-    for (final iface in interfaces) {
-      final nameLower = iface.name.toLowerCase();
-
-      // Check if it's a Wi-Fi interface
-      final isWifi =
-          windowsWifiNames.any((pattern) => nameLower.contains(pattern)) ||
-          linuxWifiNames.any((pattern) => nameLower.contains(pattern));
-
-      if (isWifi && iface.addresses.isNotEmpty) {
-        // Skip link-local addresses (169.254.x.x)
-        for (final addr in iface.addresses) {
-          if (!addr.address.startsWith('169.254.')) {
-            return addr.address;
-          }
-        }
-      }
-    }
-
-    // Check for Ethernet interfaces
-    for (final iface in interfaces) {
-      final nameLower = iface.name.toLowerCase();
-
-      final isEthernet =
-          windowsEthernetNames.any((pattern) => nameLower.contains(pattern)) ||
-          linuxEthernetNames.any((pattern) => nameLower.contains(pattern));
-
-      if (isEthernet && iface.addresses.isNotEmpty) {
-        // Skip link-local addresses (169.254.x.x)
-        for (final addr in iface.addresses) {
-          if (!addr.address.startsWith('169.254.')) {
-            return addr.address;
-          }
-        }
-      }
-    }
-
-    // Fallback: Use first non-link-local address
-    for (final iface in interfaces) {
-      for (final addr in iface.addresses) {
-        if (!addr.address.startsWith('169.254.') &&
-            !addr.address.startsWith('127.')) {
-          return addr.address;
-        }
-      }
-    }
-
-    // Last resort: first available address
-    return interfaces.first.addresses.first.address;
+    return _receiveDir!.listSync().whereType<File>().toList();
   }
+
+  void _ensureReceiveDir() {
+    if (_receiveDir != null) return;
+
+    _receiveDir = _getReceiveDir();
+    if (!_receiveDir!.existsSync()) {
+      _receiveDir!.createSync(recursive: true);
+    }
+  }
+
+  // ================= UTIL =================
 
   Directory _getReceiveDir() {
     final userProfile = Platform.environment['USERPROFILE'];
@@ -224,16 +170,23 @@ class ServerService {
       return Directory('received');
     }
 
-    // Use path.join for proper path handling
-    final downloadsPath = path.join(userProfile, 'Downloads', 'UniShare');
-    return Directory(downloadsPath);
+    return Directory(path.join(userProfile, 'Downloads', 'UniShare'));
   }
 
-  List<File> getReceivedFiles() {
-    if (!_receiveDir.existsSync()) return [];
-    return _receiveDir.listSync().whereType<File>().toList();
-  }
+  Future<String> _getLocalIp() async {
+    final interfaces = await NetworkInterface.list(
+      includeLoopback: false,
+      type: InternetAddressType.IPv4,
+    );
 
-  // Expose connection stream so UI can react to mobile connect/disconnect
-  Stream<bool> get connectionStream => _connectionController.stream;
+    for (final iface in interfaces) {
+      for (final addr in iface.addresses) {
+        if (!addr.address.startsWith('169.') &&
+            !addr.address.startsWith('127.')) {
+          return addr.address;
+        }
+      }
+    }
+    return '127.0.0.1';
+  }
 }
