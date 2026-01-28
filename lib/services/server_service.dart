@@ -25,6 +25,9 @@ class ServerService {
   // Phone → PC
   Directory? _receiveDir;
 
+  // ✅ UPLOAD STATE (SOURCE OF TRUTH)
+  final Map<String, bool> _uploading = {};
+
   // ================= START / STOP =================
 
   Future<void> start() async {
@@ -41,22 +44,20 @@ class ServerService {
     port = 52343;
 
     _server = await shelf_io.serve(router, InternetAddress.anyIPv4, port);
-
     print('Server running at http://$ip:$port');
-    print('📁 Saving received files to: ${_receiveDir!.path}');
   }
 
   Future<void> stop() async {
     await _server?.close(force: true);
     _sharedFiles.clear();
+    _uploading.clear();
     _disconnectTimer?.cancel();
   }
 
   // ================= PC → PHONE =================
 
   void addFile(File file) {
-    final name = path.basename(file.path);
-    _sharedFiles[name] = file;
+    _sharedFiles[path.basename(file.path)] = file;
   }
 
   Response _handleFileList(Request request) {
@@ -72,12 +73,10 @@ class ServerService {
       return Response.notFound('File not found');
     }
 
-    final mimeType = lookupMimeType(file.path) ?? 'application/octet-stream';
-
     return Response.ok(
       file.openRead(),
       headers: {
-        'content-type': mimeType,
+        'content-type': lookupMimeType(file.path) ?? 'application/octet-stream',
         'content-length': (await file.length()).toString(),
         'content-disposition': 'attachment; filename="$name"',
       },
@@ -105,16 +104,24 @@ class ServerService {
       if (match == null) continue;
 
       final filename = match.group(1)!;
-      final file = File(path.join(_receiveDir!.path, filename));
+      _uploading[filename] = true;
 
+      final file = File(path.join(_receiveDir!.path, filename));
       final sink = file.openWrite();
       await part.pipe(sink);
       await sink.close();
 
+      _uploading[filename] = false;
       _onPing();
     }
 
     return Response.ok('Saved');
+  }
+
+  // ================= STATUS =================
+
+  bool isReceiving(String filename) {
+    return _uploading[filename] == true;
   }
 
   // ================= CONNECTION =================
@@ -144,33 +151,23 @@ class ServerService {
 
   List<File> getReceivedFiles() {
     _ensureReceiveDir();
-
-    if (!_receiveDir!.existsSync()) {
-      return [];
-    }
-
-    return _receiveDir!.listSync().whereType<File>().toList();
+    return _receiveDir!.existsSync()
+        ? _receiveDir!.listSync().whereType<File>().toList()
+        : [];
   }
 
   void _ensureReceiveDir() {
-    if (_receiveDir != null) return;
-
-    _receiveDir = _getReceiveDir();
+    _receiveDir ??= _getReceiveDir();
     if (!_receiveDir!.existsSync()) {
       _receiveDir!.createSync(recursive: true);
     }
   }
 
-  // ================= UTIL =================
-
   Directory _getReceiveDir() {
     final userProfile = Platform.environment['USERPROFILE'];
-
-    if (userProfile == null) {
-      return Directory('received');
-    }
-
-    return Directory(path.join(userProfile, 'Downloads', 'UniShare'));
+    return userProfile == null
+        ? Directory('received')
+        : Directory(path.join(userProfile, 'Downloads', 'UniShare'));
   }
 
   Future<String> _getLocalIp() async {

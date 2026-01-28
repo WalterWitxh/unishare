@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import '../widgets/qr_code_display.dart';
 import '../services/server_service.dart';
 
+enum ReceiveStatus { receiving, completed }
+
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
 
@@ -16,6 +18,8 @@ class _DesktopHomeState extends State<DesktopHome> {
   bool isServerRunning = false;
   bool isLoading = false;
   bool isConnected = false;
+
+  late DateTime _sessionStart;
 
   final ServerService _serverService = ServerService();
   StreamSubscription<bool>? _connSub;
@@ -35,25 +39,23 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  Widget _buildStartView() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Icon(Icons.computer, size: 64),
-        const SizedBox(height: 16),
-        const Text(
-          'Desktop Mode',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 24),
-        FilledButton.icon(
-          onPressed: _startServer,
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('Start Server'),
-        ),
-      ],
-    );
-  }
+  Widget _buildStartView() => Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      const Icon(Icons.computer, size: 64),
+      const SizedBox(height: 16),
+      const Text(
+        'Desktop Mode',
+        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+      ),
+      const SizedBox(height: 24),
+      FilledButton.icon(
+        onPressed: _startServer,
+        icon: const Icon(Icons.play_arrow),
+        label: const Text('Start Server'),
+      ),
+    ],
+  );
 
   Widget _buildMainLayout() {
     return Padding(
@@ -86,18 +88,14 @@ class _DesktopHomeState extends State<DesktopHome> {
           Expanded(
             child: Stack(
               children: [
-                // HISTORY ICON – top right
                 Positioned(
                   top: 0,
                   right: 0,
                   child: IconButton(
-                    tooltip: 'Received files history',
                     icon: const Icon(Icons.history),
-                    onPressed: _showReceivedFiles,
+                    onPressed: _showHistoryFiles,
                   ),
                 ),
-
-                // SEND / RECEIVE buttons – centered
                 Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -106,13 +104,10 @@ class _DesktopHomeState extends State<DesktopHome> {
                         onPressed: _pickAndShareFile,
                         icon: const Icon(Icons.upload),
                         label: const Text('Send'),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size(160, 48),
-                        ),
                       ),
                       const SizedBox(height: 16),
                       OutlinedButton.icon(
-                        onPressed: _showReceivedFiles,
+                        onPressed: _showSessionReceivedFiles,
                         icon: const Icon(Icons.download),
                         label: const Text('Receive'),
                       ),
@@ -129,12 +124,14 @@ class _DesktopHomeState extends State<DesktopHome> {
 
   Future<void> _startServer() async {
     setState(() => isLoading = true);
-
     await _serverService.start();
+    _sessionStart = DateTime.now();
 
-    _connSub = _serverService.connectionStream.listen((connected) {
-      setState(() => isConnected = connected);
-    });
+    _connSub = _serverService.connectionStream.listen(
+      (c) => setState(() {
+        isConnected = c;
+      }),
+    );
 
     setState(() {
       connectionUrl = 'http://${_serverService.ip}:${_serverService.port}';
@@ -146,66 +143,96 @@ class _DesktopHomeState extends State<DesktopHome> {
   Future<void> _stopServer() async {
     await _serverService.stop();
     await _connSub?.cancel();
-
-    setState(() {
-      isServerRunning = false;
-      connectionUrl = null;
-    });
+    setState(() => isServerRunning = false);
   }
 
   Future<void> _pickAndShareFile() async {
     final result = await FilePicker.platform.pickFiles();
     if (result == null || result.files.first.path == null) return;
-
-    final file = File(result.files.first.path!);
-    _serverService.addFile(file);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${result.files.first.name} ready to send')),
-    );
+    _serverService.addFile(File(result.files.first.path!));
   }
 
-  void _showReceivedFiles() {
-    final files = _serverService.getReceivedFiles();
-
+  void _showSessionReceivedFiles() {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Received Files'),
-        content: SizedBox(
-          width: 400,
-          height: 300,
-          child: files.isEmpty
-              ? const Center(child: Text('No files received yet'))
-              : ListView.builder(
-                  itemCount: files.length,
-                  itemBuilder: (_, i) {
-                    final file = files[i];
-                    final name = file.uri.pathSegments.last;
-                    return ListTile(
-                      title: Text(name),
-                      subtitle: Text(
-                        '${(file.lengthSync() / 1024).toStringAsFixed(1)} KB',
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.folder_open),
-                        onPressed: () {
-                          Process.start(
-                            Platform.isWindows ? 'explorer' : 'xdg-open',
-                            [file.parent.path],
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Timer? timer;
+
+            void startTimer() {
+              timer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+                setDialogState(() {});
+              });
+            }
+
+            startTimer();
+
+            final files = _serverService
+                .getReceivedFiles()
+                .where((f) => f.lastModifiedSync().isAfter(_sessionStart))
+                .toList();
+
+            return AlertDialog(
+              title: const Text('Received Files'),
+              content: SizedBox(
+                width: 420,
+                height: 320,
+                child: files.isEmpty
+                    ? const Center(child: Text('Waiting for files…'))
+                    : ListView.builder(
+                        itemCount: files.length,
+                        itemBuilder: (_, i) {
+                          final f = files[i];
+                          final name = f.uri.pathSegments.last;
+                          final receiving = _serverService.isReceiving(name);
+
+                          return ListTile(
+                            leading: Icon(
+                              receiving
+                                  ? Icons.downloading
+                                  : Icons.check_circle,
+                              color: receiving ? Colors.blue : Colors.green,
+                            ),
+                            title: Text(name),
+                            subtitle: receiving
+                                ? const LinearProgressIndicator()
+                                : const Text('Completed'),
                           );
                         },
                       ),
-                    );
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    timer?.cancel();
+                    Navigator.pop(context);
                   },
+                  child: const Text('Close'),
                 ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showHistoryFiles() {
+    final files = _serverService.getReceivedFiles();
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Received Files (History)'),
+        content: SizedBox(
+          width: 420,
+          height: 320,
+          child: ListView(
+            children: files
+                .map((f) => ListTile(title: Text(f.uri.pathSegments.last)))
+                .toList(),
           ),
-        ],
+        ),
       ),
     );
   }
