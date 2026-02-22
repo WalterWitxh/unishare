@@ -81,6 +81,23 @@ class _DesktopHomeState extends State<DesktopHome> {
                   icon: const Icon(Icons.stop),
                   label: const Text('Stop Server'),
                 ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    TextButton.icon(
+                      onPressed: _refreshIp,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Refresh IP'),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton.icon(
+                      onPressed: _showManualIpDialog,
+                      icon: const Icon(Icons.edit),
+                      label: const Text('Change IP'),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -150,6 +167,56 @@ class _DesktopHomeState extends State<DesktopHome> {
     final result = await FilePicker.platform.pickFiles();
     if (result == null || result.files.first.path == null) return;
     _serverService.addFile(File(result.files.first.path!));
+  }
+
+  Future<void> _refreshIp() async {
+    final newIp = await _serverService.detectLocalIp();
+    if (mounted) {
+      setState(() {
+        _serverService.ip = newIp;
+        connectionUrl = 'http://$newIp:${_serverService.port}';
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('IP updated to: $newIp')));
+    }
+  }
+
+  void _showManualIpDialog() {
+    final ipController = TextEditingController(text: _serverService.ip);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Change IP Address'),
+        content: TextField(
+          controller: ipController,
+          decoration: const InputDecoration(
+            hintText: '192.168.1.100',
+            labelText: 'IP Address',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final newIp = ipController.text.trim();
+              if (newIp.isNotEmpty) {
+                setState(() {
+                  _serverService.ip = newIp;
+                  connectionUrl = 'http://$newIp:${_serverService.port}';
+                });
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSessionReceivedFiles() {

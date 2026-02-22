@@ -147,6 +147,12 @@ class ServerService {
 
   Stream<bool> get connectionStream => _connectionController.stream;
 
+  // ================= IP DETECTION =================
+
+  Future<String> detectLocalIp() async {
+    return await _getLocalIp();
+  }
+
   // ================= FILE ACCESS =================
 
   List<File> getReceivedFiles() {
@@ -171,19 +177,62 @@ class ServerService {
   }
 
   Future<String> _getLocalIp() async {
-    final interfaces = await NetworkInterface.list(
-      includeLoopback: false,
-      type: InternetAddressType.IPv4,
-    );
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
 
-    for (final iface in interfaces) {
-      for (final addr in iface.addresses) {
-        if (!addr.address.startsWith('169.') &&
-            !addr.address.startsWith('127.')) {
-          return addr.address;
+      // Preferred interface names (case-insensitive)
+      // WiFi/WLAN first since mobile hotspot appears as WiFi
+      final preferredPatterns = [
+        RegExp(r'wi-?fi|wlan', caseSensitive: false),
+        RegExp(r'ethernet', caseSensitive: false),
+      ];
+
+      // First pass: Try WiFi/WLAN first (mobile hotspot)
+      for (final pattern in preferredPatterns) {
+        for (final iface in interfaces) {
+          if (pattern.hasMatch(iface.name)) {
+            for (final addr in iface.addresses) {
+              if (_isValidIp(addr.address)) {
+                print('Selected IP from ${iface.name}: ${addr.address}');
+                return addr.address;
+              }
+            }
+          }
         }
       }
+
+      // Second pass: Try any interface with a valid IP
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (_isValidIp(addr.address)) {
+            print('Selected IP from ${iface.name}: ${addr.address}');
+            return addr.address;
+          }
+        }
+      }
+    } catch (e) {
+      print('Error detecting IP: $e');
     }
+
     return '127.0.0.1';
+  }
+
+  bool _isValidIp(String address) {
+    // Exclude link-local addresses (169.254.x.x)
+    if (address.startsWith('169.254.')) {
+      return false;
+    }
+    // Exclude loopback
+    if (address.startsWith('127.')) {
+      return false;
+    }
+    // Exclude IPv6
+    if (address.startsWith('::')) {
+      return false;
+    }
+    return true;
   }
 }
