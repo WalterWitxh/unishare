@@ -88,6 +88,11 @@ class ServerService {
 
   Future<Response> _handleVerifyPin(Request request) async {
     try {
+      if (_validTokens.isNotEmpty) {
+        return Response(403, body: jsonEncode({
+          'error': 'Another device is already connected',
+        }));
+      }
       final body = await request.readAsString();
       final json = jsonDecode(body) as Map<String, dynamic>;
       final pin = json['pin']?.toString();
@@ -97,6 +102,7 @@ class ServerService {
       if (pin != _sessionPin) {
         return Response(401, body: jsonEncode({'error': 'Invalid PIN'}));
       }
+      _validTokens.clear();
       final token = _generatePin() + DateTime.now().millisecondsSinceEpoch.toString();
       _validTokens.add(token);
       return Response.ok(
@@ -197,6 +203,7 @@ class ServerService {
 
     _disconnectTimer = Timer(_disconnectTimeout, () {
       _isConnected = false;
+      _validTokens.clear();
       _connectionController.add(false);
     });
   }
@@ -226,10 +233,12 @@ class ServerService {
   }
 
   Directory _getReceiveDir() {
-    final userProfile = Platform.environment['USERPROFILE'];
-    return userProfile == null
-        ? Directory('received')
-        : Directory(path.join(userProfile, 'Downloads', 'UniShare'));
+    final home = Platform.isWindows
+        ? Platform.environment['USERPROFILE']
+        : Platform.environment['HOME'];
+    return home == null
+        ? Directory(path.join(path.current, 'received'))
+        : Directory(path.join(home, 'Downloads', 'UniShare'));
   }
 
   Future<String> _getLocalIp() async {

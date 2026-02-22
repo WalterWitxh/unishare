@@ -19,6 +19,7 @@ enum ConnectionStateStatus {
   scanning,
   pinRequired,
   connecting,
+  connectionSuccess,
   connected,
   failed,
 }
@@ -35,9 +36,15 @@ class _MobileHomeState extends State<MobileHome> {
   String _pinError = '';
 
   final TextEditingController _pinController = TextEditingController();
+  final MobileScannerController _scannerController = MobileScannerController();
+  String? _lastScannedCode;
+  DateTime? _lastScanTime;
+  static const _scanCooldown = Duration(milliseconds: 1500);
+  static const _minValidUrlLength = 10;
 
   Timer? _pingTimer;
   Timer? _filePollTimer;
+  Timer? _successTimer;
 
   List<String> _availableFiles = [];
 
@@ -45,7 +52,9 @@ class _MobileHomeState extends State<MobileHome> {
   void dispose() {
     _pingTimer?.cancel();
     _filePollTimer?.cancel();
+    _successTimer?.cancel();
     _pinController.dispose();
+    _scannerController.dispose();
     super.dispose();
   }
 
@@ -75,6 +84,8 @@ class _MobileHomeState extends State<MobileHome> {
         return _buildPinInput();
       case ConnectionStateStatus.connecting:
         return _buildConnecting();
+      case ConnectionStateStatus.connectionSuccess:
+        return _buildConnectionSuccess();
       case ConnectionStateStatus.connected:
         return _buildConnected();
       case ConnectionStateStatus.failed:
@@ -97,7 +108,10 @@ class _MobileHomeState extends State<MobileHome> {
             ),
             const SizedBox(height: 24),
             FilledButton(
-              onPressed: () => setState(() => showScanner = true),
+              onPressed: () => setState(() {
+                showScanner = true;
+                _lastScannedCode = null;
+              }),
               child: const Text('Start Scanning'),
             ),
           ],
@@ -105,12 +119,47 @@ class _MobileHomeState extends State<MobileHome> {
       );
     }
 
-    return MobileScanner(
-      onDetect: (capture) {
-        final code = capture.barcodes.first.rawValue;
-        if (code != null) _onQrScanned(code);
-      },
+    const scanSize = 250.0;
+    return Stack(
+      children: [
+        MobileScanner(controller: _scannerController, onDetect: _onScanDetect),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            return CustomPaint(
+              size: Size(constraints.maxWidth, constraints.maxHeight),
+              painter: _ScanOverlayPainter(scanSize: scanSize),
+            );
+          },
+        ),
+        Center(
+          child: Container(
+            width: scanSize,
+            height: scanSize,
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.green, width: 4),
+              borderRadius: BorderRadius.circular(16),
+            ),
+          ),
+        ),
+      ],
     );
+  }
+
+  void _onScanDetect(BarcodeCapture capture) {
+    if (capture.barcodes.isEmpty) return;
+    final barcode = capture.barcodes.first;
+    final code = barcode.rawValue;
+    if (code == null || code.length < _minValidUrlLength) return;
+    if (!code.startsWith('http://') && !code.startsWith('https://')) return;
+    final now = DateTime.now();
+    if (code == _lastScannedCode &&
+        _lastScanTime != null &&
+        now.difference(_lastScanTime!) < _scanCooldown) {
+      return;
+    }
+    _lastScannedCode = code;
+    _lastScanTime = now;
+    _onQrScanned(code);
   }
 
   void _onQrScanned(String url) {
@@ -215,7 +264,8 @@ class _MobileHomeState extends State<MobileHome> {
     } else {
       setState(() {
         _pinVerifying = false;
-        _pinError = 'Invalid PIN. Try again.';
+        _pinError =
+            HttpClientService.lastVerifyError ?? 'Invalid PIN. Try again.';
       });
     }
   }
@@ -229,6 +279,37 @@ class _MobileHomeState extends State<MobileHome> {
           CircularProgressIndicator(),
           SizedBox(height: 16),
           Text('Connecting to desktop...'),
+        ],
+      ),
+    );
+  }
+
+  // ---------- CONNECTION SUCCESS ----------
+  Widget _buildConnectionSuccess() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: 1),
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOutBack,
+            builder: (context, value, child) {
+              return Transform.scale(
+                scale: value,
+                child: Icon(Icons.check_circle, size: 100, color: Colors.green),
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          Text(
+            'Connection successful!',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
         ],
       ),
     );
@@ -355,10 +436,17 @@ class _MobileHomeState extends State<MobileHome> {
 
       if (ok) {
         setState(() {
-          status = ConnectionStateStatus.connected;
+          status = ConnectionStateStatus.connectionSuccess;
         });
         _startHeartbeat();
         _startFilePolling();
+        _successTimer?.cancel();
+        _successTimer = Timer(const Duration(milliseconds: 1500), () {
+          if (!mounted) return;
+          setState(() {
+            status = ConnectionStateStatus.connected;
+          });
+        });
       } else {
         _failConnection();
       }
@@ -468,4 +556,46 @@ class _MobileHomeState extends State<MobileHome> {
       ),
     );
   }
+}
+
+/// Paints a dim overlay with a clear rectangle in the center (scan area).
+class _ScanOverlayPainter extends CustomPainter {
+  final double scanSize;
+
+  _ScanOverlayPainter({required this.scanSize});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const dimColor = Color(0xCC000000);
+    final centerX = size.width / 2;
+    final centerY = size.height / 2;
+    final left = centerX - scanSize / 2;
+    final top = centerY - scanSize / 2;
+    final right = left + scanSize;
+    final bottom = top + scanSize;
+
+    final paint = Paint()..color = dimColor;
+
+    if (top > 0) {
+      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, top), paint);
+    }
+    if (bottom < size.height) {
+      canvas.drawRect(
+        Rect.fromLTWH(0, bottom, size.width, size.height - bottom),
+        paint,
+      );
+    }
+    if (left > 0) {
+      canvas.drawRect(Rect.fromLTWH(0, top, left, scanSize), paint);
+    }
+    if (right < size.width) {
+      canvas.drawRect(
+        Rect.fromLTWH(right, top, size.width - right, scanSize),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
