@@ -76,6 +76,31 @@ class _DesktopHomeState extends State<DesktopHome> {
                 const SizedBox(height: 12),
                 QrCodeDisplay(data: connectionUrl!),
                 const SizedBox(height: 16),
+                Text(
+                  'Enter PIN on mobile:',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _serverService.sessionPin ?? '---',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 8,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 FilledButton.icon(
                   onPressed: _stopServer,
                   icon: const Icon(Icons.stop),

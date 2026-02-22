@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -11,6 +12,10 @@ class ServerService {
   HttpServer? _server;
   late String ip;
   late int port;
+
+  // PIN authentication
+  String? _sessionPin;
+  final Set<String> _validTokens = {};
 
   // Connection tracking
   final StreamController<bool> _connectionController =
@@ -28,16 +33,34 @@ class ServerService {
   // ✅ UPLOAD STATE (SOURCE OF TRUTH)
   final Map<String, bool> _uploading = {};
 
+  String? get sessionPin => _sessionPin;
+
+  String _generatePin() {
+    final r = Random();
+    return List.generate(6, (_) => r.nextInt(10)).join();
+  }
+
+  Response? _requireAuth(Request request) {
+    final token = request.headers['x-auth-token'];
+    if (token == null || token.isEmpty || !_validTokens.contains(token)) {
+      return Response(401, body: 'Unauthorized');
+    }
+    return null;
+  }
+
   // ================= START / STOP =================
 
   Future<void> start() async {
     final router = Router();
 
+    router.post('/verify-pin', _handleVerifyPin);
     router.get('/ping', _handlePing);
     router.get('/files', _handleFileList);
     router.get('/files/<name>', _handleFileDownload);
     router.post('/upload', _handleUpload);
 
+    _sessionPin = _generatePin();
+    _validTokens.clear();
     _ensureReceiveDir();
 
     ip = await _getLocalIp();
@@ -45,12 +68,15 @@ class ServerService {
 
     _server = await shelf_io.serve(router, InternetAddress.anyIPv4, port);
     print('Server running at http://$ip:$port');
+    print('Session PIN: $_sessionPin');
   }
 
   Future<void> stop() async {
     await _server?.close(force: true);
     _sharedFiles.clear();
     _uploading.clear();
+    _sessionPin = null;
+    _validTokens.clear();
     _disconnectTimer?.cancel();
   }
 
@@ -60,7 +86,31 @@ class ServerService {
     _sharedFiles[path.basename(file.path)] = file;
   }
 
+  Future<Response> _handleVerifyPin(Request request) async {
+    try {
+      final body = await request.readAsString();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final pin = json['pin']?.toString();
+      if (pin == null || pin.isEmpty) {
+        return Response(400, body: jsonEncode({'error': 'PIN required'}));
+      }
+      if (pin != _sessionPin) {
+        return Response(401, body: jsonEncode({'error': 'Invalid PIN'}));
+      }
+      final token = _generatePin() + DateTime.now().millisecondsSinceEpoch.toString();
+      _validTokens.add(token);
+      return Response.ok(
+        jsonEncode({'token': token}),
+        headers: {'content-type': 'application/json'},
+      );
+    } catch (_) {
+      return Response(400, body: jsonEncode({'error': 'Invalid request'}));
+    }
+  }
+
   Response _handleFileList(Request request) {
+    final authErr = _requireAuth(request);
+    if (authErr != null) return authErr;
     return Response.ok(
       jsonEncode(_sharedFiles.keys.toList()),
       headers: {'content-type': 'application/json'},
@@ -68,6 +118,8 @@ class ServerService {
   }
 
   Future<Response> _handleFileDownload(Request request, String name) async {
+    final authErr = _requireAuth(request);
+    if (authErr != null) return authErr;
     final file = _sharedFiles[name];
     if (file == null || !await file.exists()) {
       return Response.notFound('File not found');
@@ -86,6 +138,8 @@ class ServerService {
   // ================= PHONE → PC =================
 
   Future<Response> _handleUpload(Request request) async {
+    final authErr = _requireAuth(request);
+    if (authErr != null) return authErr;
     _ensureReceiveDir();
 
     final contentType = request.headers['content-type'];
@@ -127,6 +181,8 @@ class ServerService {
   // ================= CONNECTION =================
 
   Response _handlePing(Request request) {
+    final authErr = _requireAuth(request);
+    if (authErr != null) return authErr;
     _onPing();
     return Response.ok('OK');
   }

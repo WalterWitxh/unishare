@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:http/http.dart' as http;
 import 'package:file_picker/file_picker.dart';
 
 import '../services/http_client_service.dart';
@@ -15,7 +15,13 @@ class MobileHome extends StatefulWidget {
   State<MobileHome> createState() => _MobileHomeState();
 }
 
-enum ConnectionStateStatus { scanning, connecting, connected, failed }
+enum ConnectionStateStatus {
+  scanning,
+  pinRequired,
+  connecting,
+  connected,
+  failed,
+}
 
 enum ConnectedView { menu, receive }
 
@@ -25,6 +31,10 @@ class _MobileHomeState extends State<MobileHome> {
   ConnectedView connectedView = ConnectedView.menu;
 
   bool showScanner = false;
+  bool _pinVerifying = false;
+  String _pinError = '';
+
+  final TextEditingController _pinController = TextEditingController();
 
   Timer? _pingTimer;
   Timer? _filePollTimer;
@@ -35,6 +45,7 @@ class _MobileHomeState extends State<MobileHome> {
   void dispose() {
     _pingTimer?.cancel();
     _filePollTimer?.cancel();
+    _pinController.dispose();
     super.dispose();
   }
 
@@ -60,6 +71,8 @@ class _MobileHomeState extends State<MobileHome> {
     switch (status) {
       case ConnectionStateStatus.scanning:
         return _buildScanner();
+      case ConnectionStateStatus.pinRequired:
+        return _buildPinInput();
       case ConnectionStateStatus.connecting:
         return _buildConnecting();
       case ConnectionStateStatus.connected:
@@ -103,10 +116,108 @@ class _MobileHomeState extends State<MobileHome> {
   void _onQrScanned(String url) {
     setState(() {
       serverUrl = url;
-      status = ConnectionStateStatus.connecting;
+      status = ConnectionStateStatus.pinRequired;
       showScanner = false;
+      _pinError = '';
+      _pinController.clear();
     });
-    _checkConnection();
+  }
+
+  // ---------- PIN INPUT ----------
+  Widget _buildPinInput() {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.lock_outline, size: 64),
+            const SizedBox(height: 16),
+            const Text(
+              'Enter PIN',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Enter the 6-digit PIN shown on desktop',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: 200,
+              child: TextField(
+                controller: _pinController,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                textAlign: TextAlign.center,
+                obscureText: true,
+                autofocus: true,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: InputDecoration(
+                  hintText: '000000',
+                  counterText: '',
+                  errorText: _pinError.isEmpty ? null : _pinError,
+                  border: const OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => _verifyPin(),
+              ),
+            ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: _pinVerifying ? null : _verifyPin,
+              child: _pinVerifying
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Connect'),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  status = ConnectionStateStatus.scanning;
+                  serverUrl = null;
+                });
+              },
+              child: const Text('Scan Again'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _verifyPin() async {
+    final pin = _pinController.text.trim();
+    if (pin.length != 6) {
+      setState(() => _pinError = 'Enter 6 digits');
+      return;
+    }
+    setState(() {
+      _pinVerifying = true;
+      _pinError = '';
+    });
+    final token = await HttpClientService.verifyPin(serverUrl!, pin);
+    if (!mounted) return;
+    if (token != null) {
+      HttpClientService.authToken = token;
+      setState(() {
+        status = ConnectionStateStatus.connecting;
+        _pinVerifying = false;
+      });
+      _checkConnection();
+    } else {
+      setState(() {
+        _pinVerifying = false;
+        _pinError = 'Invalid PIN. Try again.';
+      });
+    }
   }
 
   // ---------- CONNECTING ----------
@@ -187,6 +298,7 @@ class _MobileHomeState extends State<MobileHome> {
                       trailing: IconButton(
                         icon: const Icon(Icons.download),
                         onPressed: () async {
+                          final messenger = ScaffoldMessenger.of(context);
                           final savePath =
                               await HttpClientService.getDownloadPath(fileName);
                           await HttpClientService.downloadFile(
@@ -196,7 +308,7 @@ class _MobileHomeState extends State<MobileHome> {
                           );
 
                           if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
+                          messenger.showSnackBar(
                             SnackBar(content: Text('$fileName saved')),
                           );
                         },
@@ -221,8 +333,10 @@ class _MobileHomeState extends State<MobileHome> {
           const SizedBox(height: 16),
           FilledButton(
             onPressed: () {
+              HttpClientService.authToken = null;
               setState(() {
                 status = ConnectionStateStatus.scanning;
+                serverUrl = null;
               });
             },
             child: const Text('Scan Again'),
@@ -235,11 +349,11 @@ class _MobileHomeState extends State<MobileHome> {
   // ---------- NETWORK ----------
   Future<void> _checkConnection() async {
     try {
-      final res = await http
-          .get(Uri.parse('$serverUrl/ping'))
-          .timeout(const Duration(seconds: 4));
+      final ok = await HttpClientService.ping(
+        serverUrl!,
+      ).timeout(const Duration(seconds: 4));
 
-      if (res.statusCode == 200) {
+      if (ok) {
         setState(() {
           status = ConnectionStateStatus.connected;
         });
@@ -257,8 +371,8 @@ class _MobileHomeState extends State<MobileHome> {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       try {
-        final res = await http.get(Uri.parse('$serverUrl/ping'));
-        if (res.statusCode != 200) _failConnection();
+        final ok = await HttpClientService.ping(serverUrl!);
+        if (!ok) _failConnection();
       } catch (_) {
         _failConnection();
       }
@@ -279,6 +393,7 @@ class _MobileHomeState extends State<MobileHome> {
   void _failConnection() {
     _pingTimer?.cancel();
     _filePollTimer?.cancel();
+    HttpClientService.authToken = null;
     if (!mounted) return;
 
     setState(() {
@@ -290,6 +405,7 @@ class _MobileHomeState extends State<MobileHome> {
   void _disconnect() {
     _pingTimer?.cancel();
     _filePollTimer?.cancel();
+    HttpClientService.authToken = null;
     setState(() {
       status = ConnectionStateStatus.scanning;
       serverUrl = null;
@@ -321,6 +437,7 @@ class _MobileHomeState extends State<MobileHome> {
   // ---------- HISTORY ----------
   Future<void> _showHistory() async {
     final files = await HttpClientService.getLocalHistory();
+    if (!mounted) return;
 
     showDialog(
       context: context,
