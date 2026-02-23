@@ -36,6 +36,9 @@ class ServerService {
   // ✅ UPLOAD STATE (SOURCE OF TRUTH)
   final Map<String, bool> _uploading = {};
 
+  // Track last saved file hash
+  String? lastSavedSha;
+
   String? get sessionPin => _sessionPin;
 
   String _generatePin() {
