@@ -42,6 +42,8 @@ dependencies:
   http: ^1.2.2
 
   mime: ^2.0.0
+  encrypt: ^5.0.1
+  crypto: ^3.0.3
 
   path: ^1.9.0
   path_provider: ^2.1.4

@@ -1,11 +1,24 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
+import 'package:crypto/crypto.dart';
+import 'encryption_service.dart';
 
 class HttpClientService {
-  static String? authToken;
+  // AES-256 E2E Encryption Final Patch (UniShare)
+  // Keep session PIN in memory after successful verifyPin.
+  static String? sessionPin;
+
+  static String? _authToken;
+  static String? get authToken => _authToken;
+  static set authToken(String? v) {
+    // When client clears token (disconnect), clear session PIN from memory as well
+    if (v == null) sessionPin = null;
+    _authToken = v;
+  }
 
   static Map<String, String> get _authHeaders {
     if (authToken == null || authToken!.isEmpty) return {};
@@ -30,6 +43,8 @@ class HttpClientService {
       );
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
+        // Store session PIN in memory for E2E encryption/decryption
+        sessionPin = pin;
         return data['token']?.toString();
       }
       try {
@@ -92,8 +107,20 @@ class HttpClientService {
       throw Exception('Failed to download file');
     }
 
+    final isEncrypted = (res.headers['x-encrypted'] ?? '').toLowerCase() == 'true';
     final file = File(savePath);
-    await file.writeAsBytes(res.bodyBytes);
+
+    if (isEncrypted) {
+      if (sessionPin == null || sessionPin!.isEmpty) {
+        throw Exception('Missing session PIN for decryption');
+      }
+      final encrypted = res.bodyBytes;
+      final decrypted = await EncryptionService.decryptBytes(
+          Uint8List.fromList(encrypted), sessionPin!);
+      await file.writeAsBytes(decrypted);
+    } else {
+      await file.writeAsBytes(res.bodyBytes);
+    }
   }
 
   // =========================
@@ -105,13 +132,29 @@ class HttpClientService {
     final request = http.MultipartRequest('POST', uri);
     request.headers.addAll(_authHeaders);
 
-    request.files.add(
-      await http.MultipartFile.fromPath(
-        'file',
-        file.path,
-        filename: path.basename(file.path),
-      ),
-    );
+    // AES-256 E2E Cleanup Patch (UniShare)
+    // If we have a session PIN, encrypt bytes before uploading
+    if (sessionPin != null && sessionPin!.isNotEmpty) {
+      request.headers['X-Encrypted'] = 'true';
+      final bytes = await file.readAsBytes();
+      final encrypted = await EncryptionService.encryptBytes(
+          Uint8List.fromList(bytes), sessionPin!);
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'file',
+          encrypted,
+          filename: path.basename(file.path),
+        ),
+      );
+    } else {
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'file',
+          file.path,
+          filename: path.basename(file.path),
+        ),
+      );
+    }
 
     final response = await request.send();
 

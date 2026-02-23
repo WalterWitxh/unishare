@@ -1,12 +1,15 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
+import 'dart:typed_data';
 import 'dart:math';
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:mime/mime.dart';
+import 'encryption_service.dart';
 
 class ServerService {
   HttpServer? _server;
@@ -131,12 +134,28 @@ class ServerService {
       return Response.notFound('File not found');
     }
 
+    // AES-256 E2E Cleanup Patch (UniShare)
+    if (_sessionPin != null && _sessionPin!.isNotEmpty) {
+      final bytes = await file.readAsBytes();
+      final encrypted = await EncryptionService.encryptBytes(
+          Uint8List.fromList(bytes), _sessionPin!);
+      return Response.ok(
+        encrypted,
+        headers: {
+          'content-type': lookupMimeType(file.path) ?? 'application/octet-stream',
+          'content-length': encrypted.length.toString(),
+          'content-disposition': 'attachment; filename="${name}"',
+          'x-encrypted': 'true',
+        },
+      );
+    }
+
     return Response.ok(
       file.openRead(),
       headers: {
         'content-type': lookupMimeType(file.path) ?? 'application/octet-stream',
         'content-length': (await file.length()).toString(),
-        'content-disposition': 'attachment; filename="$name"',
+        'content-disposition': 'attachment; filename="${name}"',
       },
     );
   }
@@ -153,8 +172,11 @@ class ServerService {
       return Response(400, body: 'Expected multipart/form-data');
     }
 
+
     final boundary = contentType.split('boundary=').last;
     final transformer = MimeMultipartTransformer(boundary);
+
+    final isEncrypted = (request.headers['x-encrypted'] ?? '').toLowerCase() == 'true';
 
     await for (final part in transformer.bind(request.read())) {
       final disposition = part.headers['content-disposition'];
@@ -167,9 +189,33 @@ class ServerService {
       _uploading[filename] = true;
 
       final file = File(path.join(_receiveDir!.path, filename));
-      final sink = file.openWrite();
-      await part.pipe(sink);
-      await sink.close();
+
+      if (isEncrypted) {
+        // AES-256 E2E Cleanup Patch (UniShare)
+        if (_sessionPin == null || _sessionPin!.isEmpty) {
+          _uploading[filename] = false;
+          return Response(400, body: 'Missing session PIN for decryption');
+        }
+
+        // Read encrypted bytes and decrypt
+        final bb = BytesBuilder();
+        await for (final chunk in part) {
+          bb.add(chunk);
+        }
+        final partBytes = Uint8List.fromList(bb.takeBytes());
+        final decrypted = await EncryptionService.decryptBytes(partBytes, _sessionPin!);
+        await file.writeAsBytes(decrypted);
+      } else {
+        final sink = file.openWrite();
+        await part.pipe(sink);
+        await sink.close();
+        try {
+          final savedBytes = await file.readAsBytes();
+          lastSavedSha = sha256.convert(savedBytes).toString();
+        } catch (_) {
+          lastSavedSha = null;
+        }
+      }
 
       _uploading[filename] = false;
       _onPing();
