@@ -77,7 +77,7 @@ class _DesktopHomeState extends State<DesktopHome> {
                 QrCodeDisplay(data: connectionUrl!),
                 const SizedBox(height: 16),
                 Text(
-                  'Enter PIN on mobile:',
+                  'Enter 6-digit PIN on mobile:',
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -85,9 +85,14 @@ class _DesktopHomeState extends State<DesktopHome> {
                 ),
                 const SizedBox(height: 4),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
@@ -166,14 +171,45 @@ class _DesktopHomeState extends State<DesktopHome> {
 
   Future<void> _startServer() async {
     setState(() => isLoading = true);
+    _sessionStart = DateTime.now(); // set BEFORE await to avoid race
     await _serverService.start();
-    _sessionStart = DateTime.now();
 
-    _connSub = _serverService.connectionStream.listen(
-      (c) => setState(() {
-        isConnected = c;
-      }),
-    );
+    _connSub = _serverService.connectionStream.listen((c) {
+      setState(() => isConnected = c);
+    });
+
+    _serverService.onFileReceived = (String fileName) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 4),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          backgroundColor: Colors.green,
+          content: Row(
+            children: [
+              const Icon(
+                Icons.download_done_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '$fileName received',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    };
 
     setState(() {
       connectionUrl = 'http://${_serverService.ip}:${_serverService.port}';
@@ -250,15 +286,9 @@ class _DesktopHomeState extends State<DesktopHome> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            Timer? timer;
-
-            void startTimer() {
-              timer ??= Timer.periodic(const Duration(seconds: 1), (_) {
-                setDialogState(() {});
-              });
-            }
-
-            startTimer();
+            final timer = Timer.periodic(const Duration(seconds: 1), (_) {
+              if (context.mounted) setDialogState(() {});
+            });
 
             final files = _serverService
                 .getReceivedFiles()

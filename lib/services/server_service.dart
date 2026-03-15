@@ -25,7 +25,7 @@ class ServerService {
       StreamController<bool>.broadcast();
   bool _isConnected = false;
   Timer? _disconnectTimer;
-  final Duration _disconnectTimeout = const Duration(seconds: 5);
+  final Duration _disconnectTimeout = const Duration(seconds: 30);
 
   // PC → Phone
   final Map<String, File> _sharedFiles = {};
@@ -33,8 +33,11 @@ class ServerService {
   // Phone → PC
   Directory? _receiveDir;
 
-  // ✅ UPLOAD STATE (SOURCE OF TRUTH)
+  // UPLOAD STATE (SOURCE OF TRUTH)
   final Map<String, bool> _uploading = {};
+
+  // Callback fired when a file is fully received
+  void Function(String fileName)? onFileReceived;
 
   // Track last saved file hash
   String? lastSavedSha;
@@ -47,7 +50,8 @@ class ServerService {
   }
 
   Response? _requireAuth(Request request) {
-    final token = request.headers['x-auth-token'];
+    final token =
+        request.headers['x-auth-token'] ?? request.headers['X-Auth-Token'];
     if (token == null || token.isEmpty || !_validTokens.contains(token)) {
       return Response(401, body: 'Unauthorized');
     }
@@ -95,9 +99,10 @@ class ServerService {
   Future<Response> _handleVerifyPin(Request request) async {
     try {
       if (_validTokens.isNotEmpty) {
-        return Response(403, body: jsonEncode({
-          'error': 'Another device is already connected',
-        }));
+        return Response(
+          403,
+          body: jsonEncode({'error': 'Another device is already connected'}),
+        );
       }
       final body = await request.readAsString();
       final json = jsonDecode(body) as Map<String, dynamic>;
@@ -109,7 +114,8 @@ class ServerService {
         return Response(401, body: jsonEncode({'error': 'Invalid PIN'}));
       }
       _validTokens.clear();
-      final token = _generatePin() + DateTime.now().millisecondsSinceEpoch.toString();
+      final token =
+          _generatePin() + DateTime.now().millisecondsSinceEpoch.toString();
       _validTokens.add(token);
       return Response.ok(
         jsonEncode({'token': token}),
@@ -137,28 +143,35 @@ class ServerService {
       return Response.notFound('File not found');
     }
 
-    // AES-256 E2E Cleanup Patch (UniShare)
-    if (_sessionPin != null && _sessionPin!.isNotEmpty) {
+    // Skip encryption for large files (>50MB) to avoid OOM
+    final fileSize = await file.length();
+    if (_sessionPin != null &&
+        _sessionPin!.isNotEmpty &&
+        fileSize < 50 * 1024 * 1024) {
       final bytes = await file.readAsBytes();
       final encrypted = await EncryptionService.encryptBytes(
-          Uint8List.fromList(bytes), _sessionPin!);
+        Uint8List.fromList(bytes),
+        _sessionPin!,
+      );
       return Response.ok(
         encrypted,
         headers: {
-          'content-type': lookupMimeType(file.path) ?? 'application/octet-stream',
+          'content-type':
+              lookupMimeType(file.path) ?? 'application/octet-stream',
           'content-length': encrypted.length.toString(),
-          'content-disposition': 'attachment; filename="${name}"',
+          'content-disposition': 'attachment; filename="$name"',
           'x-encrypted': 'true',
         },
       );
     }
 
+    // Stream directly for large files or when no PIN
     return Response.ok(
       file.openRead(),
       headers: {
         'content-type': lookupMimeType(file.path) ?? 'application/octet-stream',
-        'content-length': (await file.length()).toString(),
-        'content-disposition': 'attachment; filename="${name}"',
+        'content-length': fileSize.toString(),
+        'content-disposition': 'attachment; filename="$name"',
       },
     );
   }
@@ -169,59 +182,85 @@ class ServerService {
     final authErr = _requireAuth(request);
     if (authErr != null) return authErr;
     _ensureReceiveDir();
+    _onPing(); // mark connected at start of upload
 
     final contentType = request.headers['content-type'];
     if (contentType == null || !contentType.contains('multipart/form-data')) {
       return Response(400, body: 'Expected multipart/form-data');
     }
 
-
-    final boundary = contentType.split('boundary=').last;
-    final transformer = MimeMultipartTransformer(boundary);
-
-    final isEncrypted = (request.headers['x-encrypted'] ?? '').toLowerCase() == 'true';
-
-    await for (final part in transformer.bind(request.read())) {
-      final disposition = part.headers['content-disposition'];
-      if (disposition == null) continue;
-
-      final match = RegExp(r'filename="(.+)"').firstMatch(disposition);
-      if (match == null) continue;
-
-      final filename = match.group(1)!;
-      _uploading[filename] = true;
-
-      final file = File(path.join(_receiveDir!.path, filename));
-
-      if (isEncrypted) {
-        // AES-256 E2E Cleanup Patch (UniShare)
-        if (_sessionPin == null || _sessionPin!.isEmpty) {
-          _uploading[filename] = false;
-          return Response(400, body: 'Missing session PIN for decryption');
-        }
-
-        // Read encrypted bytes and decrypt
-        final bb = BytesBuilder();
-        await for (final chunk in part) {
-          bb.add(chunk);
-        }
-        final partBytes = Uint8List.fromList(bb.takeBytes());
-        final decrypted = await EncryptionService.decryptBytes(partBytes, _sessionPin!);
-        await file.writeAsBytes(decrypted);
-      } else {
-        final sink = file.openWrite();
-        await part.pipe(sink);
-        await sink.close();
-        try {
-          final savedBytes = await file.readAsBytes();
-          lastSavedSha = sha256.convert(savedBytes).toString();
-        } catch (_) {
-          lastSavedSha = null;
-        }
-      }
-
-      _uploading[filename] = false;
+    // Keep-alive timer: resets disconnect timer every 10s during long uploads
+    final keepAliveTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _onPing();
+    });
+
+    try {
+      final boundary = contentType.split('boundary=').last;
+      final transformer = MimeMultipartTransformer(boundary);
+      final isEncrypted =
+          (request.headers['x-encrypted'] ?? '').toLowerCase() == 'true';
+
+      await for (final part in transformer.bind(request.read())) {
+        final disposition = part.headers['content-disposition'];
+        if (disposition == null) continue;
+
+        final match = RegExp(r'filename="(.+)"').firstMatch(disposition);
+        if (match == null) continue;
+
+        final filename = match.group(1)!;
+        _uploading[filename] = true;
+        _connectionController.add(_isConnected); // notify UI: receiving started
+
+        final file = File(path.join(_receiveDir!.path, filename));
+
+        try {
+          if (isEncrypted) {
+            // Encrypted: buffer all chunks then decrypt
+            final bb = BytesBuilder();
+            await for (final chunk in part) {
+              bb.add(chunk);
+            }
+            final partBytes = Uint8List.fromList(bb.takeBytes());
+            final decrypted = await EncryptionService.decryptBytes(
+              partBytes,
+              _sessionPin!,
+            );
+            await file.writeAsBytes(decrypted);
+          } else {
+            // Unencrypted: stream chunks directly to disk (no memory buffer)
+            final sink = file.openWrite();
+            try {
+              await for (final chunk in part) {
+                sink.add(chunk);
+              }
+              await sink.flush();
+            } finally {
+              await sink.close();
+            }
+
+            // Compute SHA only for small files to avoid reading large files back into RAM
+            try {
+              final savedSize = await file.length();
+              if (savedSize < 50 * 1024 * 1024) {
+                final savedBytes = await file.readAsBytes();
+                lastSavedSha = sha256.convert(savedBytes).toString();
+              } else {
+                lastSavedSha = null;
+              }
+            } catch (_) {
+              lastSavedSha = null;
+            }
+          }
+        } finally {
+          _uploading[filename] = false;
+          _connectionController.add(_isConnected); // notify UI: receiving done
+          onFileReceived?.call(filename); // notify desktop UI with snackbar
+        }
+
+        _onPing(); // reset disconnect timer after each file
+      }
+    } finally {
+      keepAliveTimer.cancel();
     }
 
     return Response.ok('Saved');
@@ -297,14 +336,12 @@ class ServerService {
         type: InternetAddressType.IPv4,
       );
 
-      // Preferred interface names (case-insensitive)
-      // WiFi/WLAN first since mobile hotspot appears as WiFi
       final preferredPatterns = [
         RegExp(r'wi-?fi|wlan', caseSensitive: false),
         RegExp(r'ethernet', caseSensitive: false),
       ];
 
-      // First pass: Try WiFi/WLAN first (mobile hotspot)
+      // First pass: prefer Wi-Fi / WLAN (mobile hotspot shows up here)
       for (final pattern in preferredPatterns) {
         for (final iface in interfaces) {
           if (pattern.hasMatch(iface.name)) {
@@ -318,7 +355,7 @@ class ServerService {
         }
       }
 
-      // Second pass: Try any interface with a valid IP
+      // Second pass: any valid interface
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
           if (_isValidIp(addr.address)) {
@@ -335,18 +372,9 @@ class ServerService {
   }
 
   bool _isValidIp(String address) {
-    // Exclude link-local addresses (169.254.x.x)
-    if (address.startsWith('169.254.')) {
-      return false;
-    }
-    // Exclude loopback
-    if (address.startsWith('127.')) {
-      return false;
-    }
-    // Exclude IPv6
-    if (address.startsWith('::')) {
-      return false;
-    }
+    if (address.startsWith('169.254.')) return false; // link-local
+    if (address.startsWith('127.')) return false; // loopback
+    if (address.startsWith('::')) return false; // IPv6
     return true;
   }
 }

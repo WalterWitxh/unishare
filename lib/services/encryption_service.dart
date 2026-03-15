@@ -29,7 +29,10 @@ class EncryptionService {
   }
 
   /// Decrypt bytes produced by [encryptBytes]
-  static Future<Uint8List> decryptBytes(Uint8List encryptedData, String pin) async {
+  static Future<Uint8List> decryptBytes(
+    Uint8List encryptedData,
+    String pin,
+  ) async {
     if (encryptedData.length < 16) {
       throw ArgumentError('Invalid encrypted data');
     }
@@ -40,7 +43,10 @@ class EncryptionService {
       encrypt.AES(key, mode: encrypt.AESMode.cbc, padding: 'PKCS7'),
     );
     final iv = encrypt.IV(ivBytes);
-    final decrypted = encrypter.decryptBytes(encrypt.Encrypted(cipherBytes), iv: iv);
+    final decrypted = encrypter.decryptBytes(
+      encrypt.Encrypted(cipherBytes),
+      iv: iv,
+    );
     return Uint8List.fromList(decrypted);
   }
 }

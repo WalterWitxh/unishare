@@ -106,7 +106,8 @@ class HttpClientService {
       throw Exception('Failed to download file');
     }
 
-    final isEncrypted = (res.headers['x-encrypted'] ?? '').toLowerCase() == 'true';
+    final isEncrypted =
+        (res.headers['x-encrypted'] ?? '').toLowerCase() == 'true';
     final file = File(savePath);
 
     if (isEncrypted) {
@@ -115,7 +116,9 @@ class HttpClientService {
       }
       final encrypted = res.bodyBytes;
       final decrypted = await EncryptionService.decryptBytes(
-          Uint8List.fromList(encrypted), sessionPin!);
+        Uint8List.fromList(encrypted),
+        sessionPin!,
+      );
       await file.writeAsBytes(decrypted);
     } else {
       await file.writeAsBytes(res.bodyBytes);
@@ -128,37 +131,53 @@ class HttpClientService {
 
   static Future<void> uploadFile(String baseUrl, File file) async {
     final uri = Uri.parse('$baseUrl/upload');
+    final fileName = path.basename(file.path);
+    final fileSize = await file.length();
+
+    // For encrypted uploads we still need bytes (AES needs full data)
+    // but we skip encryption for files > 50MB to avoid OOM
+    final bool useEncryption =
+        sessionPin != null &&
+        sessionPin!.isNotEmpty &&
+        fileSize < 50 * 1024 * 1024;
+
     final request = http.MultipartRequest('POST', uri);
     request.headers.addAll(_authHeaders);
 
-    // AES-256 E2E Cleanup Patch (UniShare)
-    // If we have a session PIN, encrypt bytes before uploading
-    if (sessionPin != null && sessionPin!.isNotEmpty) {
+    // Increase timeout for large files
+    final httpClient = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 30)
+      ..idleTimeout = const Duration(minutes: 10);
+
+    if (useEncryption) {
       request.headers['X-Encrypted'] = 'true';
       final bytes = await file.readAsBytes();
       final encrypted = await EncryptionService.encryptBytes(
-          Uint8List.fromList(bytes), sessionPin!);
-      request.files.add(
-        http.MultipartFile.fromBytes(
-          'file',
-          encrypted,
-          filename: path.basename(file.path),
-        ),
+        Uint8List.fromList(bytes),
+        sessionPin!,
       );
+      request.files.add(
+        http.MultipartFile.fromBytes('file', encrypted, filename: fileName),
+      );
+      final response = await request.send();
+      if (response.statusCode != 200) throw Exception('Upload failed');
     } else {
+      // Stream directly — no full file in memory, works for any file size
       request.files.add(
-        await http.MultipartFile.fromPath(
+        http.MultipartFile(
           'file',
-          file.path,
-          filename: path.basename(file.path),
+          file.openRead(),
+          fileSize,
+          filename: fileName,
         ),
       );
-    }
-
-    final response = await request.send();
-
-    if (response.statusCode != 200) {
-      throw Exception('Upload failed');
+      final response = await request.send().timeout(
+        const Duration(minutes: 10),
+        onTimeout: () => throw Exception(
+          'Upload timed out — file too large or connection too slow',
+        ),
+      );
+      if (response.statusCode != 200) throw Exception('Upload failed');
     }
   }
 
@@ -172,7 +191,9 @@ class HttpClientService {
     if (Platform.isAndroid) {
       dir = Directory('/storage/emulated/0/Download/UniShare');
     } else {
-      final base = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+      final base =
+          await getDownloadsDirectory() ??
+          await getApplicationDocumentsDirectory();
       dir = Directory(path.join(base.path, 'UniShare'));
     }
     if (!await dir.exists()) {
@@ -187,7 +208,9 @@ class HttpClientService {
     if (Platform.isAndroid) {
       dir = Directory('/storage/emulated/0/Download/UniShare');
     } else {
-      final base = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+      final base =
+          await getDownloadsDirectory() ??
+          await getApplicationDocumentsDirectory();
       dir = Directory(path.join(base.path, 'UniShare'));
     }
     if (!await dir.exists()) return [];

@@ -36,7 +36,10 @@ class _MobileHomeState extends State<MobileHome> {
   String _pinError = '';
 
   final TextEditingController _pinController = TextEditingController();
-  final MobileScannerController _scannerController = MobileScannerController();
+
+  // Always recreated fresh — never reuse after stop/dispose
+  MobileScannerController _scannerController = MobileScannerController();
+
   String? _lastScannedCode;
   DateTime? _lastScanTime;
   static const _scanCooldown = Duration(milliseconds: 1500);
@@ -47,6 +50,8 @@ class _MobileHomeState extends State<MobileHome> {
   Timer? _successTimer;
 
   List<String> _availableFiles = [];
+
+  // ================= LIFECYCLE =================
 
   @override
   void dispose() {
@@ -71,7 +76,6 @@ class _MobileHomeState extends State<MobileHome> {
           ),
         ],
       ),
-
       body: _buildBody(),
     );
   }
@@ -93,7 +97,8 @@ class _MobileHomeState extends State<MobileHome> {
     }
   }
 
-  // ---------- SCAN ----------
+  // ================= SCAN =================
+
   Widget _buildScanner() {
     if (!showScanner) {
       return Center(
@@ -108,10 +113,7 @@ class _MobileHomeState extends State<MobileHome> {
             ),
             const SizedBox(height: 24),
             FilledButton(
-              onPressed: () => setState(() {
-                showScanner = true;
-                _lastScannedCode = null;
-              }),
+              onPressed: _startFreshScanner,
               child: const Text('Start Scanning'),
             ),
           ],
@@ -124,12 +126,10 @@ class _MobileHomeState extends State<MobileHome> {
       children: [
         MobileScanner(controller: _scannerController, onDetect: _onScanDetect),
         LayoutBuilder(
-          builder: (context, constraints) {
-            return CustomPaint(
-              size: Size(constraints.maxWidth, constraints.maxHeight),
-              painter: _ScanOverlayPainter(scanSize: scanSize),
-            );
-          },
+          builder: (context, constraints) => CustomPaint(
+            size: Size(constraints.maxWidth, constraints.maxHeight),
+            painter: _ScanOverlayPainter(scanSize: scanSize),
+          ),
         ),
         Center(
           child: Container(
@@ -145,12 +145,23 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
+  /// Dispose old controller and create a brand-new one before showing scanner.
+  /// MobileScannerController cannot be reliably restarted after stop — must recreate.
+  void _startFreshScanner() {
+    _scannerController.dispose();
+    _scannerController = MobileScannerController();
+    _lastScannedCode = null;
+    _lastScanTime = null;
+    setState(() => showScanner = true);
+  }
+
   void _onScanDetect(BarcodeCapture capture) {
     if (capture.barcodes.isEmpty) return;
     final barcode = capture.barcodes.first;
     final code = barcode.rawValue;
     if (code == null || code.length < _minValidUrlLength) return;
     if (!code.startsWith('http://') && !code.startsWith('https://')) return;
+
     final now = DateTime.now();
     if (code == _lastScannedCode &&
         _lastScanTime != null &&
@@ -172,7 +183,8 @@ class _MobileHomeState extends State<MobileHome> {
     });
   }
 
-  // ---------- PIN INPUT ----------
+  // ================= PIN INPUT =================
+
   Widget _buildPinInput() {
     return Center(
       child: SingleChildScrollView(
@@ -228,12 +240,10 @@ class _MobileHomeState extends State<MobileHome> {
             ),
             const SizedBox(height: 16),
             TextButton(
-              onPressed: () {
-                setState(() {
-                  status = ConnectionStateStatus.scanning;
-                  serverUrl = null;
-                });
-              },
+              onPressed: () => setState(() {
+                status = ConnectionStateStatus.scanning;
+                serverUrl = null;
+              }),
               child: const Text('Scan Again'),
             ),
           ],
@@ -270,7 +280,8 @@ class _MobileHomeState extends State<MobileHome> {
     }
   }
 
-  // ---------- CONNECTING ----------
+  // ================= CONNECTING =================
+
   Widget _buildConnecting() {
     return const Center(
       child: Column(
@@ -284,7 +295,8 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ---------- CONNECTION SUCCESS ----------
+  // ================= CONNECTION SUCCESS =================
+
   Widget _buildConnectionSuccess() {
     return Center(
       child: Column(
@@ -294,12 +306,14 @@ class _MobileHomeState extends State<MobileHome> {
             tween: Tween(begin: 0, end: 1),
             duration: const Duration(milliseconds: 400),
             curve: Curves.easeOutBack,
-            builder: (context, value, child) {
-              return Transform.scale(
-                scale: value,
-                child: Icon(Icons.check_circle, size: 100, color: Colors.green),
-              );
-            },
+            builder: (context, value, child) => Transform.scale(
+              scale: value,
+              child: const Icon(
+                Icons.check_circle,
+                size: 100,
+                color: Colors.green,
+              ),
+            ),
           ),
           const SizedBox(height: 24),
           Text(
@@ -315,14 +329,14 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ---------- CONNECTED ----------
+  // ================= CONNECTED =================
+
   Widget _buildConnected() {
     return connectedView == ConnectedView.menu
         ? _buildConnectedMenu()
         : _buildReceiveView();
   }
 
-  // ---------- MENU ----------
   Widget _buildConnectedMenu() {
     return Center(
       child: Column(
@@ -333,17 +347,11 @@ class _MobileHomeState extends State<MobileHome> {
             child: const Text('Close Connection'),
           ),
           const SizedBox(height: 40),
-
           FilledButton(onPressed: _sendFile, child: const Text('Send')),
-
           const SizedBox(height: 16),
-
           FilledButton(
-            onPressed: () {
-              setState(() {
-                connectedView = ConnectedView.receive;
-              });
-            },
+            onPressed: () =>
+                setState(() => connectedView = ConnectedView.receive),
             child: const Text('Receive'),
           ),
         ],
@@ -351,18 +359,15 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ---------- RECEIVE ----------
+  // ================= RECEIVE VIEW =================
+
   Widget _buildReceiveView() {
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.all(12),
           child: FilledButton(
-            onPressed: () {
-              setState(() {
-                connectedView = ConnectedView.menu;
-              });
-            },
+            onPressed: () => setState(() => connectedView = ConnectedView.menu),
             child: const Text('Back'),
           ),
         ),
@@ -378,21 +383,7 @@ class _MobileHomeState extends State<MobileHome> {
                       title: Text(fileName),
                       trailing: IconButton(
                         icon: const Icon(Icons.download),
-                        onPressed: () async {
-                          final messenger = ScaffoldMessenger.of(context);
-                          final savePath =
-                              await HttpClientService.getDownloadPath(fileName);
-                          await HttpClientService.downloadFile(
-                            serverUrl!,
-                            fileName,
-                            savePath,
-                          );
-
-                          if (!mounted) return;
-                          messenger.showSnackBar(
-                            SnackBar(content: Text('$fileName saved')),
-                          );
-                        },
+                        onPressed: () => _downloadFile(fileName),
                       ),
                     );
                   },
@@ -402,7 +393,42 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ---------- FAILED ----------
+  Future<void> _downloadFile(String fileName) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final savePath = await HttpClientService.getDownloadPath(fileName);
+      await HttpClientService.downloadFile(serverUrl!, fileName, savePath);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Text('$fileName saved'),
+            ],
+          ),
+          backgroundColor: Colors.green,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Failed to download $fileName'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  // ================= FAILED =================
+
   Widget _buildFailed() {
     return Center(
       child: Column(
@@ -427,25 +453,21 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ---------- NETWORK ----------
+  // ================= NETWORK =================
+
   Future<void> _checkConnection() async {
     try {
       final ok = await HttpClientService.ping(
         serverUrl!,
-      ).timeout(const Duration(seconds: 4));
-
+      ).timeout(const Duration(seconds: 8));
       if (ok) {
-        setState(() {
-          status = ConnectionStateStatus.connectionSuccess;
-        });
+        setState(() => status = ConnectionStateStatus.connectionSuccess);
         _startHeartbeat();
         _startFilePolling();
         _successTimer?.cancel();
         _successTimer = Timer(const Duration(milliseconds: 1500), () {
           if (!mounted) return;
-          setState(() {
-            status = ConnectionStateStatus.connected;
-          });
+          setState(() => status = ConnectionStateStatus.connected);
         });
       } else {
         _failConnection();
@@ -479,11 +501,13 @@ class _MobileHomeState extends State<MobileHome> {
   }
 
   void _failConnection() {
+    // Guard: prevent repeated calls from the heartbeat timer
+    if (status == ConnectionStateStatus.failed) return;
     _pingTimer?.cancel();
     _filePollTimer?.cancel();
+    _successTimer?.cancel();
     HttpClientService.authToken = null;
     if (!mounted) return;
-
     setState(() {
       status = ConnectionStateStatus.failed;
       _availableFiles.clear();
@@ -493,40 +517,115 @@ class _MobileHomeState extends State<MobileHome> {
   void _disconnect() {
     _pingTimer?.cancel();
     _filePollTimer?.cancel();
+    _successTimer?.cancel();
     HttpClientService.authToken = null;
+    _lastScannedCode = null;
+    _lastScanTime = null;
+
+    // Dispose the broken controller and create a fresh one.
+    // MobileScannerController cannot be reliably restarted — must be recreated.
+    _scannerController.dispose();
+    _scannerController = MobileScannerController();
+
     setState(() {
       status = ConnectionStateStatus.scanning;
+      showScanner = true; // jump straight to scanner view
       serverUrl = null;
       connectedView = ConnectedView.menu;
       _availableFiles.clear();
+      _pinController.clear();
+      _pinError = '';
     });
   }
 
+  // ================= SEND FILE =================
+
   Future<void> _sendFile() async {
+    final result = await FilePicker.platform.pickFiles();
+    if (result == null || result.files.first.path == null) return;
+
+    final file = File(result.files.first.path!);
+    final fileSize = await file.length();
+    final fileName = result.files.first.name;
+
+    // Pause heartbeat so the upload doesn't trigger a false disconnect
+    _pingTimer?.cancel();
+
+    if (!mounted) return;
+
+    // Show animated bottom sheet during upload
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _TransferSheet(fileName: fileName, fileSize: fileSize),
+    );
+
+    bool success = false;
+    String? errorMsg;
+
     try {
-      final result = await FilePicker.platform.pickFiles();
-      if (result == null || result.files.first.path == null) return;
-
-      final file = File(result.files.first.path!);
       await HttpClientService.uploadFile(serverUrl!, file);
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('File sent to PC')));
+      success = true;
     } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Failed to send file')));
+      errorMsg = fileSize > 50 * 1024 * 1024
+          ? 'Large file failed — check Wi-Fi'
+          : 'Failed to send file';
+    } finally {
+      if (mounted) Navigator.of(context).pop(); // close bottom sheet
+      // Always restart heartbeat after upload
+      if (status == ConnectionStateStatus.connected) _startHeartbeat();
     }
+
+    if (!mounted) return;
+
+    _showTransferBanner(
+      message: success
+          ? '$fileName sent successfully'
+          : (errorMsg ?? 'Transfer failed'),
+      icon: success ? Icons.check_circle_rounded : Icons.error_rounded,
+      color: success ? Colors.green : Colors.red,
+    );
   }
 
-  // ---------- HISTORY ----------
+  void _showTransferBanner({
+    required String message,
+    required IconData icon,
+    required Color color,
+  }) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 4),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        content: Row(
+          children: [
+            Icon(icon, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ================= HISTORY =================
+
   Future<void> _showHistory() async {
     final files = await HttpClientService.getLocalHistory();
     if (!mounted) return;
-
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -558,36 +657,31 @@ class _MobileHomeState extends State<MobileHome> {
   }
 }
 
-/// Paints a dim overlay with a clear rectangle in the center (scan area).
+// ================= SCAN OVERLAY =================
+
 class _ScanOverlayPainter extends CustomPainter {
   final double scanSize;
-
-  _ScanOverlayPainter({required this.scanSize});
+  const _ScanOverlayPainter({required this.scanSize});
 
   @override
   void paint(Canvas canvas, Size size) {
     const dimColor = Color(0xCC000000);
-    final centerX = size.width / 2;
-    final centerY = size.height / 2;
-    final left = centerX - scanSize / 2;
-    final top = centerY - scanSize / 2;
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final left = cx - scanSize / 2;
+    final top = cy - scanSize / 2;
     final right = left + scanSize;
     final bottom = top + scanSize;
-
     final paint = Paint()..color = dimColor;
 
-    if (top > 0) {
-      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, top), paint);
-    }
+    if (top > 0) canvas.drawRect(Rect.fromLTWH(0, 0, size.width, top), paint);
     if (bottom < size.height) {
       canvas.drawRect(
         Rect.fromLTWH(0, bottom, size.width, size.height - bottom),
         paint,
       );
     }
-    if (left > 0) {
-      canvas.drawRect(Rect.fromLTWH(0, top, left, scanSize), paint);
-    }
+    if (left > 0) canvas.drawRect(Rect.fromLTWH(0, top, left, scanSize), paint);
     if (right < size.width) {
       canvas.drawRect(
         Rect.fromLTWH(right, top, size.width - right, scanSize),
@@ -598,4 +692,98 @@ class _ScanOverlayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ================= TRANSFER SHEET =================
+
+class _TransferSheet extends StatefulWidget {
+  final String fileName;
+  final int fileSize;
+  const _TransferSheet({required this.fileName, required this.fileSize});
+
+  @override
+  State<_TransferSheet> createState() => _TransferSheetState();
+}
+
+class _TransferSheetState extends State<_TransferSheet>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  String _formatSize(int bytes) {
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedBuilder(
+            animation: _pulse,
+            builder: (_, __) => Icon(
+              Icons.upload_rounded,
+              size: 48,
+              color: Color.lerp(
+                Theme.of(context).colorScheme.primary,
+                Theme.of(context).colorScheme.primaryContainer,
+                _pulse.value,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Sending file…',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            widget.fileName,
+            style: Theme.of(context).textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _formatSize(widget.fileSize),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 20),
+          const LinearProgressIndicator(),
+          const SizedBox(height: 16),
+          Text(
+            'Please keep the app open',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
