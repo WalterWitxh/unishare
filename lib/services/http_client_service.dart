@@ -7,31 +7,26 @@ import 'package:path_provider/path_provider.dart';
 import 'encryption_service.dart';
 
 class HttpClientService {
-  // AES-256 E2E Encryption Final Patch (UniShare)
-  // Keep session PIN in memory after successful verifyPin.
+  // Session PIN kept in memory for E2E encryption
   static String? sessionPin;
 
   static String? _authToken;
   static String? get authToken => _authToken;
   static set authToken(String? v) {
-    // When client clears token (disconnect), clear session PIN from memory as well
-    if (v == null) sessionPin = null;
+    if (v == null) sessionPin = null; // clear PIN on disconnect
     _authToken = v;
   }
 
+  // Shelf lowercases all incoming headers — send lowercase to match
   static Map<String, String> get _authHeaders {
     if (authToken == null || authToken!.isEmpty) return {};
-    return {'X-Auth-Token': authToken!};
+    return {'x-auth-token': authToken!};
   }
 
-  // =========================
-  // AUTH
-  // =========================
+  // ================= AUTH =================
 
   static String? lastVerifyError;
 
-  /// Verifies PIN with server. Returns token on success, null on failure.
-  /// Sets [lastVerifyError] when failed (e.g. "Invalid PIN", "Another device is already connected").
   static Future<String?> verifyPin(String baseUrl, String pin) async {
     lastVerifyError = null;
     try {
@@ -42,7 +37,6 @@ class HttpClientService {
       );
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
-        // Store session PIN in memory for E2E encryption/decryption
         sessionPin = pin;
         return data['token']?.toString();
       }
@@ -61,7 +55,6 @@ class HttpClientService {
     }
   }
 
-  /// Ping with auth token.
   static Future<bool> ping(String baseUrl) async {
     try {
       final res = await http.get(
@@ -74,83 +67,73 @@ class HttpClientService {
     }
   }
 
-  // =========================
-  // PC → PHONE
-  // =========================
+  // ================= PC → PHONE (download) =================
 
   static Future<List<String>> getFiles(String baseUrl) async {
     final res = await http.get(
       Uri.parse('$baseUrl/files'),
       headers: _authHeaders,
     );
-
-    if (res.statusCode != 200) {
-      throw Exception('Failed to fetch file list');
-    }
-
+    if (res.statusCode != 200) throw Exception('Failed to fetch file list');
     final data = jsonDecode(res.body) as List;
     return data.map((e) => e.toString()).toList();
   }
 
+  /// Downloads a file from the desktop server and saves it to [savePath].
+  /// Handles both encrypted (small files) and plain (large files / images).
   static Future<void> downloadFile(
     String baseUrl,
     String fileName,
     String savePath,
   ) async {
-    final res = await http.get(
-      Uri.parse('$baseUrl/files/$fileName'),
-      headers: _authHeaders,
-    );
+    final res = await http
+        .get(Uri.parse('$baseUrl/files/$fileName'), headers: _authHeaders)
+        .timeout(
+          const Duration(minutes: 10),
+          onTimeout: () => throw Exception('Download timed out'),
+        );
 
     if (res.statusCode != 200) {
-      throw Exception('Failed to download file');
+      throw Exception('Download failed (HTTP ${res.statusCode})');
     }
 
+    // Server sends lowercase header value 'true' or 'false'
     final isEncrypted =
         (res.headers['x-encrypted'] ?? '').toLowerCase() == 'true';
+
     final file = File(savePath);
 
-    if (isEncrypted) {
-      if (sessionPin == null || sessionPin!.isEmpty) {
-        throw Exception('Missing session PIN for decryption');
-      }
-      final encrypted = res.bodyBytes;
+    if (isEncrypted && sessionPin != null && sessionPin!.isNotEmpty) {
+      // Decrypt AES-256-CBC payload before writing
       final decrypted = await EncryptionService.decryptBytes(
-        Uint8List.fromList(encrypted),
+        Uint8List.fromList(res.bodyBytes),
         sessionPin!,
       );
       await file.writeAsBytes(decrypted);
     } else {
+      // Write raw bytes directly — correct for PNG, JPG, MP4, any format
       await file.writeAsBytes(res.bodyBytes);
     }
   }
 
-  // =========================
-  // PHONE → PC
-  // =========================
+  // ================= PHONE → PC (upload) =================
 
   static Future<void> uploadFile(String baseUrl, File file) async {
     final uri = Uri.parse('$baseUrl/upload');
     final fileName = path.basename(file.path);
     final fileSize = await file.length();
 
-    // For encrypted uploads we still need bytes (AES needs full data)
-    // but we skip encryption for files > 50MB to avoid OOM
-    final bool useEncryption =
+    // Encrypt only files under 50 MB to avoid OOM on large files
+    final useEncryption =
         sessionPin != null &&
         sessionPin!.isNotEmpty &&
         fileSize < 50 * 1024 * 1024;
 
-    final request = http.MultipartRequest('POST', uri);
-    request.headers.addAll(_authHeaders);
-
-    // Increase timeout for large files
-    final httpClient = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 30)
-      ..idleTimeout = const Duration(minutes: 10);
+    final request = http.MultipartRequest('POST', uri)
+      ..headers.addAll(_authHeaders);
 
     if (useEncryption) {
-      request.headers['X-Encrypted'] = 'true';
+      request.headers['x-encrypted'] = 'true';
       final bytes = await file.readAsBytes();
       final encrypted = await EncryptionService.encryptBytes(
         Uint8List.fromList(bytes),
@@ -159,10 +142,8 @@ class HttpClientService {
       request.files.add(
         http.MultipartFile.fromBytes('file', encrypted, filename: fileName),
       );
-      final response = await request.send();
-      if (response.statusCode != 200) throw Exception('Upload failed');
     } else {
-      // Stream directly — no full file in memory, works for any file size
+      // Stream directly — no full-file memory buffer, safe for large videos
       request.files.add(
         http.MultipartFile(
           'file',
@@ -171,22 +152,39 @@ class HttpClientService {
           filename: fileName,
         ),
       );
-      final response = await request.send().timeout(
-        const Duration(minutes: 10),
-        onTimeout: () => throw Exception(
-          'Upload timed out — file too large or connection too slow',
-        ),
-      );
-      if (response.statusCode != 200) throw Exception('Upload failed');
+    }
+
+    final streamed = await request.send().timeout(
+      const Duration(minutes: 15),
+      onTimeout: () => throw Exception('Upload timed out'),
+    );
+
+    // Drain response to properly complete the HTTP transaction
+    await streamed.stream.drain<void>();
+
+    if (streamed.statusCode != 200) {
+      throw Exception('Upload failed (HTTP ${streamed.statusCode})');
     }
   }
 
-  // =========================
-  // LOCAL (PHONE) STORAGE
-  // =========================
+  // ================= LOCAL STORAGE =================
 
-  /// Download folder path (Android: external Downloads; others: app documents).
   static Future<String> getDownloadPath(String fileName) async {
+    final dir = await _uniShareDir();
+    return path.join(dir.path, fileName);
+  }
+
+  static Future<List<String>> getLocalHistory() async {
+    final dir = await _uniShareDir();
+    if (!await dir.exists()) return [];
+    return dir
+        .listSync()
+        .whereType<File>()
+        .map((f) => path.basename(f.path))
+        .toList();
+  }
+
+  static Future<Directory> _uniShareDir() async {
     Directory dir;
     if (Platform.isAndroid) {
       dir = Directory('/storage/emulated/0/Download/UniShare');
@@ -199,25 +197,6 @@ class HttpClientService {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
-    return path.join(dir.path, fileName);
-  }
-
-  /// History = already downloaded files
-  static Future<List<String>> getLocalHistory() async {
-    Directory dir;
-    if (Platform.isAndroid) {
-      dir = Directory('/storage/emulated/0/Download/UniShare');
-    } else {
-      final base =
-          await getDownloadsDirectory() ??
-          await getApplicationDocumentsDirectory();
-      dir = Directory(path.join(base.path, 'UniShare'));
-    }
-    if (!await dir.exists()) return [];
-    return dir
-        .listSync()
-        .whereType<File>()
-        .map((f) => path.basename(f.path))
-        .toList();
+    return dir;
   }
 }

@@ -33,13 +33,22 @@ class ServerService {
   // Phone → PC
   Directory? _receiveDir;
 
-  // UPLOAD STATE (SOURCE OF TRUTH)
+  // Upload state
   final Map<String, bool> _uploading = {};
 
-  // Callback fired when a file is fully received
+  // ── Desktop UI notification callbacks ──────────────────────────────
+  /// Fired when addFile() is called — desktop shows "ready to send" toast
+  void Function(String fileName)? onFileShared;
+
+  /// Fired when mobile starts downloading a file from desktop
+  void Function(String fileName)? onFileDownloadStarted;
+
+  /// Fired when mobile finishes downloading a file from desktop
+  void Function(String fileName)? onFileDownloadCompleted;
+
+  /// Fired when mobile finishes uploading a file to desktop
   void Function(String fileName)? onFileReceived;
 
-  // Track last saved file hash
   String? lastSavedSha;
 
   String? get sessionPin => _sessionPin;
@@ -50,8 +59,8 @@ class ServerService {
   }
 
   Response? _requireAuth(Request request) {
-    final token =
-        request.headers['x-auth-token'] ?? request.headers['X-Auth-Token'];
+    // Shelf lowercases all headers — check lowercase only
+    final token = request.headers['x-auth-token'];
     if (token == null || token.isEmpty || !_validTokens.contains(token)) {
       return Response(401, body: 'Unauthorized');
     }
@@ -66,7 +75,7 @@ class ServerService {
     router.post('/verify-pin', _handleVerifyPin);
     router.get('/ping', _handlePing);
     router.get('/files', _handleFileList);
-    router.get('/files/<name>', _handleFileDownload);
+    router.get('/files/<n>', _handleFileDownload);
     router.post('/upload', _handleUpload);
 
     _sessionPin = _generatePin();
@@ -93,7 +102,10 @@ class ServerService {
   // ================= PC → PHONE =================
 
   void addFile(File file) {
-    _sharedFiles[path.basename(file.path)] = file;
+    final name = path.basename(file.path);
+    _sharedFiles[name] = file;
+    // Tell desktop UI the file is staged and ready
+    onFileShared?.call(name);
   }
 
   Future<Response> _handleVerifyPin(Request request) async {
@@ -138,21 +150,31 @@ class ServerService {
   Future<Response> _handleFileDownload(Request request, String name) async {
     final authErr = _requireAuth(request);
     if (authErr != null) return authErr;
+
     final file = _sharedFiles[name];
     if (file == null || !await file.exists()) {
       return Response.notFound('File not found');
     }
 
-    // Skip encryption for large files (>50MB) to avoid OOM
+    // Notify desktop: mobile just started downloading
+    onFileDownloadStarted?.call(name);
+
     final fileSize = await file.length();
-    if (_sessionPin != null &&
+
+    // Encrypt only files under 50 MB — larger files are streamed plain
+    // to avoid loading the entire file into RAM (causes OOM / freeze)
+    final shouldEncrypt =
+        _sessionPin != null &&
         _sessionPin!.isNotEmpty &&
-        fileSize < 50 * 1024 * 1024) {
+        fileSize < 50 * 1024 * 1024;
+
+    if (shouldEncrypt) {
       final bytes = await file.readAsBytes();
       final encrypted = await EncryptionService.encryptBytes(
         Uint8List.fromList(bytes),
         _sessionPin!,
       );
+      onFileDownloadCompleted?.call(name);
       return Response.ok(
         encrypted,
         headers: {
@@ -165,13 +187,31 @@ class ServerService {
       );
     }
 
-    // Stream directly for large files or when no PIN
+    // Stream large file directly to mobile — no RAM buffer, no encryption
+    // Wrap the stream so we can fire onFileDownloadCompleted when it ends
+    final rawStream = file.openRead();
+    var _streamDone = false;
+    final wrappedStream = rawStream.transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (data, sink) => sink.add(data),
+        handleError: (e, st, sink) => sink.addError(e, st),
+        handleDone: (sink) {
+          if (!_streamDone) {
+            _streamDone = true;
+            onFileDownloadCompleted?.call(name);
+          }
+          sink.close();
+        },
+      ),
+    );
+
     return Response.ok(
-      file.openRead(),
+      wrappedStream,
       headers: {
         'content-type': lookupMimeType(file.path) ?? 'application/octet-stream',
         'content-length': fileSize.toString(),
         'content-disposition': 'attachment; filename="$name"',
+        'x-encrypted': 'false',
       },
     );
   }
@@ -182,14 +222,14 @@ class ServerService {
     final authErr = _requireAuth(request);
     if (authErr != null) return authErr;
     _ensureReceiveDir();
-    _onPing(); // mark connected at start of upload
+    _onPing();
 
     final contentType = request.headers['content-type'];
     if (contentType == null || !contentType.contains('multipart/form-data')) {
       return Response(400, body: 'Expected multipart/form-data');
     }
 
-    // Keep-alive timer: resets disconnect timer every 10s during long uploads
+    // Reset disconnect timer every 10 s so large uploads don't drop
     final keepAliveTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _onPing();
     });
@@ -209,13 +249,12 @@ class ServerService {
 
         final filename = match.group(1)!;
         _uploading[filename] = true;
-        _connectionController.add(_isConnected); // notify UI: receiving started
+        _connectionController.add(_isConnected); // UI: receiving started
 
         final file = File(path.join(_receiveDir!.path, filename));
 
         try {
           if (isEncrypted) {
-            // Encrypted: buffer all chunks then decrypt
             final bb = BytesBuilder();
             await for (final chunk in part) {
               bb.add(chunk);
@@ -227,7 +266,7 @@ class ServerService {
             );
             await file.writeAsBytes(decrypted);
           } else {
-            // Unencrypted: stream chunks directly to disk (no memory buffer)
+            // Stream chunks straight to disk — no full-file memory buffer
             final sink = file.openWrite();
             try {
               await for (final chunk in part) {
@@ -237,8 +276,7 @@ class ServerService {
             } finally {
               await sink.close();
             }
-
-            // Compute SHA only for small files to avoid reading large files back into RAM
+            // Compute SHA only for small files
             try {
               final savedSize = await file.length();
               if (savedSize < 50 * 1024 * 1024) {
@@ -253,11 +291,11 @@ class ServerService {
           }
         } finally {
           _uploading[filename] = false;
-          _connectionController.add(_isConnected); // notify UI: receiving done
-          onFileReceived?.call(filename); // notify desktop UI with snackbar
+          _connectionController.add(_isConnected); // UI: receiving done
+          onFileReceived?.call(filename); // desktop green snackbar
         }
 
-        _onPing(); // reset disconnect timer after each file
+        _onPing();
       }
     } finally {
       keepAliveTimer.cancel();
@@ -268,9 +306,7 @@ class ServerService {
 
   // ================= STATUS =================
 
-  bool isReceiving(String filename) {
-    return _uploading[filename] == true;
-  }
+  bool isReceiving(String filename) => _uploading[filename] == true;
 
   // ================= CONNECTION =================
 
@@ -283,12 +319,10 @@ class ServerService {
 
   void _onPing() {
     _disconnectTimer?.cancel();
-
     if (!_isConnected) {
       _isConnected = true;
       _connectionController.add(true);
     }
-
     _disconnectTimer = Timer(_disconnectTimeout, () {
       _isConnected = false;
       _validTokens.clear();
@@ -300,9 +334,7 @@ class ServerService {
 
   // ================= IP DETECTION =================
 
-  Future<String> detectLocalIp() async {
-    return await _getLocalIp();
-  }
+  Future<String> detectLocalIp() async => await _getLocalIp();
 
   // ================= FILE ACCESS =================
 
@@ -341,7 +373,6 @@ class ServerService {
         RegExp(r'ethernet', caseSensitive: false),
       ];
 
-      // First pass: prefer Wi-Fi / WLAN (mobile hotspot shows up here)
       for (final pattern in preferredPatterns) {
         for (final iface in interfaces) {
           if (pattern.hasMatch(iface.name)) {
@@ -355,7 +386,6 @@ class ServerService {
         }
       }
 
-      // Second pass: any valid interface
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
           if (_isValidIp(addr.address)) {
@@ -372,9 +402,9 @@ class ServerService {
   }
 
   bool _isValidIp(String address) {
-    if (address.startsWith('169.254.')) return false; // link-local
-    if (address.startsWith('127.')) return false; // loopback
-    if (address.startsWith('::')) return false; // IPv6
+    if (address.startsWith('169.254.')) return false;
+    if (address.startsWith('127.')) return false;
+    if (address.startsWith('::')) return false;
     return true;
   }
 }

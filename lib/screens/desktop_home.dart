@@ -5,8 +5,6 @@ import 'package:flutter/material.dart';
 import '../widgets/qr_code_display.dart';
 import '../services/server_service.dart';
 
-enum ReceiveStatus { receiving, completed }
-
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
 
@@ -25,6 +23,10 @@ class _DesktopHomeState extends State<DesktopHome> {
   StreamSubscription<bool>? _connSub;
   String? connectionUrl;
 
+  // ── Per-file download state shown in the UI ──────────────────────
+  // Maps filename → 'sending' | 'sent'
+  final Map<String, String> _sendFileStatus = {};
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -38,6 +40,8 @@ class _DesktopHomeState extends State<DesktopHome> {
       ),
     );
   }
+
+  // ================= START VIEW =================
 
   Widget _buildStartView() => Column(
     mainAxisAlignment: MainAxisAlignment.center,
@@ -57,21 +61,36 @@ class _DesktopHomeState extends State<DesktopHome> {
     ],
   );
 
+  // ================= MAIN LAYOUT =================
+
   Widget _buildMainLayout() {
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Row(
         children: [
+          // ── Left: QR + PIN + controls ──
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  isConnected ? 'Connected' : 'Scan QR on Mobile',
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      isConnected ? Icons.wifi : Icons.wifi_off,
+                      size: 16,
+                      color: isConnected ? Colors.green : Colors.grey,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isConnected ? 'Connected' : 'Scan QR on Mobile',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: isConnected ? Colors.green : null,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 QrCodeDisplay(data: connectionUrl!),
@@ -97,11 +116,10 @@ class _DesktopHomeState extends State<DesktopHome> {
                   ),
                   child: Text(
                     _serverService.sessionPin ?? '---',
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 8,
-                      fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
                 ),
@@ -131,7 +149,10 @@ class _DesktopHomeState extends State<DesktopHome> {
               ],
             ),
           ),
+
           const VerticalDivider(width: 40),
+
+          // ── Right: Send / Receive + file status list ──
           Expanded(
             child: Stack(
               children: [
@@ -140,26 +161,84 @@ class _DesktopHomeState extends State<DesktopHome> {
                   right: 0,
                   child: IconButton(
                     icon: const Icon(Icons.history),
+                    tooltip: 'Received files history',
                     onPressed: _showHistoryFiles,
                   ),
                 ),
-                Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: _pickAndShareFile,
-                        icon: const Icon(Icons.upload),
-                        label: const Text('Send'),
+                Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: _pickAndShareFile,
+                      icon: const Icon(Icons.upload),
+                      label: const Text('Send to Mobile'),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: _showSessionReceivedFiles,
+                      icon: const Icon(Icons.download),
+                      label: const Text('View Received'),
+                    ),
+
+                    // ── Shared files status list ──────────────────────
+                    if (_sendFileStatus.isNotEmpty) ...[
+                      const SizedBox(height: 20),
+                      const Divider(),
+                      const Text(
+                        'Shared files',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                      const SizedBox(height: 16),
-                      OutlinedButton.icon(
-                        onPressed: _showSessionReceivedFiles,
-                        icon: const Icon(Icons.download),
-                        label: const Text('Receive'),
-                      ),
+                      const SizedBox(height: 8),
+                      ..._sendFileStatus.entries.map((e) {
+                        final isSending = e.value == 'sending';
+                        final isSent = e.value == 'sent';
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              isSending
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      isSent
+                                          ? Icons.check_circle
+                                          : Icons.hourglass_empty,
+                                      size: 14,
+                                      color: isSent
+                                          ? Colors.green
+                                          : Colors.orange,
+                                    ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  e.key,
+                                  style: const TextStyle(fontSize: 12),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                isSending ? 'Sending…' : 'Sent ✓',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isSending ? Colors.blue : Colors.green,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                     ],
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -169,45 +248,58 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
+  // ================= SERVER LIFECYCLE =================
+
   Future<void> _startServer() async {
     setState(() => isLoading = true);
-    _sessionStart = DateTime.now(); // set BEFORE await to avoid race
+    _sessionStart = DateTime.now();
     await _serverService.start();
 
+    // Connection state
     _connSub = _serverService.connectionStream.listen((c) {
       setState(() => isConnected = c);
     });
 
-    _serverService.onFileReceived = (String fileName) {
+    // ── File staged for sending (addFile called) ─────────────────────
+    _serverService.onFileShared = (fileName) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 4),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          backgroundColor: Colors.green,
-          content: Row(
-            children: [
-              const Icon(
-                Icons.download_done_rounded,
-                color: Colors.white,
-                size: 20,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  '$fileName received',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+      setState(() => _sendFileStatus[fileName] = 'ready');
+      _showDesktopSnackbar(
+        '$fileName ready — waiting for mobile to download',
+        icon: Icons.upload_file,
+        color: Colors.blue,
+      );
+    };
+
+    // ── Mobile started downloading ───────────────────────────────────
+    _serverService.onFileDownloadStarted = (fileName) {
+      if (!mounted) return;
+      setState(() => _sendFileStatus[fileName] = 'sending');
+      _showDesktopSnackbar(
+        'Sending $fileName to mobile…',
+        icon: Icons.swap_horiz,
+        color: Colors.orange,
+      );
+    };
+
+    // ── Mobile finished downloading ──────────────────────────────────
+    _serverService.onFileDownloadCompleted = (fileName) {
+      if (!mounted) return;
+      setState(() => _sendFileStatus[fileName] = 'sent');
+      _showDesktopSnackbar(
+        '$fileName delivered to mobile ✓',
+        icon: Icons.check_circle_rounded,
+        color: Colors.green,
+      );
+    };
+
+    // ── Mobile finished uploading (Phone → PC) ───────────────────────
+    _serverService.onFileReceived = (fileName) {
+      if (!mounted) return;
+      _showDesktopSnackbar(
+        '$fileName received from mobile',
+        icon: Icons.download_done_rounded,
+        color: Colors.green,
       );
     };
 
@@ -221,14 +313,56 @@ class _DesktopHomeState extends State<DesktopHome> {
   Future<void> _stopServer() async {
     await _serverService.stop();
     await _connSub?.cancel();
-    setState(() => isServerRunning = false);
+    setState(() {
+      isServerRunning = false;
+      _sendFileStatus.clear();
+    });
   }
+
+  // ================= SEND FILE =================
 
   Future<void> _pickAndShareFile() async {
     final result = await FilePicker.platform.pickFiles();
     if (result == null || result.files.first.path == null) return;
-    _serverService.addFile(File(result.files.first.path!));
+    final file = File(result.files.first.path!);
+    // addFile triggers onFileShared callback which shows the snackbar
+    _serverService.addFile(file);
   }
+
+  // ================= HELPER: DESKTOP SNACKBAR =================
+
+  void _showDesktopSnackbar(
+    String message, {
+    required IconData icon,
+    required Color color,
+    Duration duration = const Duration(seconds: 4),
+  }) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: duration,
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: color,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        content: Row(
+          children: [
+            Icon(icon, color: Colors.white, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ================= IP =================
 
   Future<void> _refreshIp() async {
     final newIp = await _serverService.detectLocalIp();
@@ -245,7 +379,6 @@ class _DesktopHomeState extends State<DesktopHome> {
 
   void _showManualIpDialog() {
     final ipController = TextEditingController(text: _serverService.ip);
-
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -280,6 +413,8 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
+  // ================= RECEIVED FILES DIALOGS =================
+
   void _showSessionReceivedFiles() {
     showDialog(
       context: context,
@@ -308,7 +443,6 @@ class _DesktopHomeState extends State<DesktopHome> {
                           final f = files[i];
                           final name = f.uri.pathSegments.last;
                           final receiving = _serverService.isReceiving(name);
-
                           return ListTile(
                             leading: Icon(
                               receiving
@@ -327,7 +461,7 @@ class _DesktopHomeState extends State<DesktopHome> {
               actions: [
                 TextButton(
                   onPressed: () {
-                    timer?.cancel();
+                    timer.cancel();
                     Navigator.pop(context);
                   },
                   child: const Text('Close'),
@@ -349,12 +483,25 @@ class _DesktopHomeState extends State<DesktopHome> {
         content: SizedBox(
           width: 420,
           height: 320,
-          child: ListView(
-            children: files
-                .map((f) => ListTile(title: Text(f.uri.pathSegments.last)))
-                .toList(),
-          ),
+          child: files.isEmpty
+              ? const Center(child: Text('No files received yet'))
+              : ListView(
+                  children: files
+                      .map(
+                        (f) => ListTile(
+                          leading: const Icon(Icons.insert_drive_file),
+                          title: Text(f.uri.pathSegments.last),
+                        ),
+                      )
+                      .toList(),
+                ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
