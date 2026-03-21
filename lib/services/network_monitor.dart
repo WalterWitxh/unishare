@@ -17,7 +17,7 @@ class NetworkMonitor {
   String? _lastDetectedIp;
 
   void startMonitoring() {
-    // Check every 2 seconds if IP changed
+    // check ip
     _detectionTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       final newIp = await _detectLocalIp();
       if (newIp != _lastDetectedIp) {
@@ -35,14 +35,14 @@ class NetworkMonitor {
         type: InternetAddressType.IPv4,
       );
 
-      // Priority order for Windows
+      // windows first
       final preferredPatterns = [
         RegExp(r'ethernet', caseSensitive: false),
         RegExp(r'wi-?fi|wlan', caseSensitive: false),
         RegExp(r'hotspot|mobile|adapter', caseSensitive: false),
       ];
 
-      // First pass: Match preferred patterns
+      // try preferred
       for (final pattern in preferredPatterns) {
         for (final iface in interfaces) {
           if (pattern.hasMatch(iface.name)) {
@@ -52,7 +52,7 @@ class NetworkMonitor {
         }
       }
 
-      // Second pass: Any valid IP
+      // any ip
       for (final iface in interfaces) {
         final ip = _getValidIpFromInterface(iface);
         if (ip != null) return ip;
@@ -73,15 +73,15 @@ class NetworkMonitor {
   }
 
   bool _isValidIp(String address) {
-    // Exclude link-local addresses (169.254.x.x) - auto-assigned when no DHCP
+    // skip link local
     if (address.startsWith('169.254.')) {
       return false;
     }
-    // Exclude loopback
+    // skip loopback
     if (address.startsWith('127.')) {
       return false;
     }
-    // Exclude IPv6
+    // skip ipv6
     if (address.startsWith('::')) {
       return false;
     }

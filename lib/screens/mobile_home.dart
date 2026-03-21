@@ -37,7 +37,7 @@ class _MobileHomeState extends State<MobileHome> {
 
   final TextEditingController _pinController = TextEditingController();
 
-  // Always recreated fresh — never reuse after stop/dispose
+  // new scanner
   MobileScannerController _scannerController = MobileScannerController();
 
   String? _lastScannedCode;
@@ -51,8 +51,7 @@ class _MobileHomeState extends State<MobileHome> {
 
   List<String> _availableFiles = [];
 
-  // ================= LIFECYCLE =================
-
+  // lifecycle
   @override
   void dispose() {
     _pingTimer?.cancel();
@@ -97,8 +96,7 @@ class _MobileHomeState extends State<MobileHome> {
     }
   }
 
-  // ================= SCAN =================
-
+  // scan
   Widget _buildScanner() {
     if (!showScanner) {
       return Center(
@@ -145,8 +143,7 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  /// Dispose old controller and create a brand-new one before showing scanner.
-  /// MobileScannerController cannot be reliably restarted after stop — must recreate.
+  // new scanner
   void _startFreshScanner() {
     _scannerController.dispose();
     _scannerController = MobileScannerController();
@@ -183,8 +180,7 @@ class _MobileHomeState extends State<MobileHome> {
     });
   }
 
-  // ================= PIN INPUT =================
-
+  // pin
   Widget _buildPinInput() {
     return Center(
       child: SingleChildScrollView(
@@ -280,8 +276,7 @@ class _MobileHomeState extends State<MobileHome> {
     }
   }
 
-  // ================= CONNECTING =================
-
+  // connecting
   Widget _buildConnecting() {
     return const Center(
       child: Column(
@@ -295,8 +290,7 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ================= CONNECTION SUCCESS =================
-
+  // connected
   Widget _buildConnectionSuccess() {
     return Center(
       child: Column(
@@ -329,8 +323,7 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ================= CONNECTED =================
-
+  // connected
   Widget _buildConnected() {
     return connectedView == ConnectedView.menu
         ? _buildConnectedMenu()
@@ -359,8 +352,7 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ================= RECEIVE VIEW =================
-
+  // receive
   Widget _buildReceiveView() {
     return Column(
       children: [
@@ -427,8 +419,7 @@ class _MobileHomeState extends State<MobileHome> {
     }
   }
 
-  // ================= FAILED =================
-
+  // failed
   Widget _buildFailed() {
     return Center(
       child: Column(
@@ -453,8 +444,7 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ================= NETWORK =================
-
+  // network
   Future<void> _checkConnection() async {
     try {
       final ok = await HttpClientService.ping(
@@ -501,7 +491,7 @@ class _MobileHomeState extends State<MobileHome> {
   }
 
   void _failConnection() {
-    // Guard: prevent repeated calls from the heartbeat timer
+    // no repeat
     if (status == ConnectionStateStatus.failed) return;
     _pingTimer?.cancel();
     _filePollTimer?.cancel();
@@ -522,14 +512,13 @@ class _MobileHomeState extends State<MobileHome> {
     _lastScannedCode = null;
     _lastScanTime = null;
 
-    // Dispose the broken controller and create a fresh one.
-    // MobileScannerController cannot be reliably restarted — must be recreated.
+    // fix scanner
     _scannerController.dispose();
     _scannerController = MobileScannerController();
 
     setState(() {
       status = ConnectionStateStatus.scanning;
-      showScanner = true; // jump straight to scanner view
+      showScanner = true; // jump to scanner
       serverUrl = null;
       connectedView = ConnectedView.menu;
       _availableFiles.clear();
@@ -538,8 +527,7 @@ class _MobileHomeState extends State<MobileHome> {
     });
   }
 
-  // ================= SEND FILE =================
-
+  // send
   Future<void> _sendFile() async {
     final result = await FilePicker.platform.pickFiles();
     if (result == null || result.files.first.path == null) return;
@@ -548,12 +536,12 @@ class _MobileHomeState extends State<MobileHome> {
     final fileSize = await file.length();
     final fileName = result.files.first.name;
 
-    // Pause heartbeat so the upload doesn't trigger a false disconnect
+    // pause ping
     _pingTimer?.cancel();
 
     if (!mounted) return;
 
-    // Show animated bottom sheet during upload
+    // show progress
     showModalBottomSheet(
       context: context,
       isDismissible: false,
@@ -621,8 +609,7 @@ class _MobileHomeState extends State<MobileHome> {
     );
   }
 
-  // ================= HISTORY =================
-
+  // history
   Future<void> _showHistory() async {
     final files = await HttpClientService.getLocalHistory();
     if (!mounted) return;
@@ -657,8 +644,7 @@ class _MobileHomeState extends State<MobileHome> {
   }
 }
 
-// ================= SCAN OVERLAY =================
-
+// scan overlay
 class _ScanOverlayPainter extends CustomPainter {
   final double scanSize;
   const _ScanOverlayPainter({required this.scanSize});
@@ -694,8 +680,7 @@ class _ScanOverlayPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-// ================= TRANSFER SHEET =================
-
+// transfer
 class _TransferSheet extends StatefulWidget {
   final String fileName;
   final int fileSize;

@@ -4,17 +4,16 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
 
-/// AES-256 E2E Encryption Patch (UniShare)
+// encryption
 class EncryptionService {
-  /// Derive 32-byte key from PIN using SHA-256
+  // key from pin
   static List<int> generateKeyFromPin(String pin) {
     final bytes = utf8.encode(pin);
     final digest = sha256.convert(bytes);
     return digest.bytes;
   }
 
-  /// Encrypt bytes using AES-256-CBC with PKCS7 padding.
-  /// Returns bytes with IV (16 bytes) prepended: [IV | ciphertext]
+  // encrypt
   static Future<Uint8List> encryptBytes(Uint8List data, String pin) async {
     final key = encrypt.Key(Uint8List.fromList(generateKeyFromPin(pin)));
     final iv = encrypt.IV.fromSecureRandom(16);
@@ -28,7 +27,7 @@ class EncryptionService {
     return out;
   }
 
-  /// Decrypt bytes produced by [encryptBytes]
+  // decrypt
   static Future<Uint8List> decryptBytes(
     Uint8List encryptedData,
     String pin,

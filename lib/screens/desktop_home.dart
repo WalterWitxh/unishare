@@ -23,8 +23,7 @@ class _DesktopHomeState extends State<DesktopHome> {
   StreamSubscription<bool>? _connSub;
   String? connectionUrl;
 
-  // ── Per-file download state shown in the UI ──────────────────────
-  // Maps filename → 'sending' | 'sent'
+  // file status
   final Map<String, String> _sendFileStatus = {};
 
   @override
@@ -41,8 +40,7 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  // ================= START VIEW =================
-
+  // start screen
   Widget _buildStartView() => Column(
     mainAxisAlignment: MainAxisAlignment.center,
     children: [
@@ -61,14 +59,13 @@ class _DesktopHomeState extends State<DesktopHome> {
     ],
   );
 
-  // ================= MAIN LAYOUT =================
-
+  // main ui
   Widget _buildMainLayout() {
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Row(
         children: [
-          // ── Left: QR + PIN + controls ──
+          // left side
           Expanded(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -152,7 +149,7 @@ class _DesktopHomeState extends State<DesktopHome> {
 
           const VerticalDivider(width: 40),
 
-          // ── Right: Send / Receive + file status list ──
+          // right side
           Expanded(
             child: Stack(
               children: [
@@ -180,7 +177,7 @@ class _DesktopHomeState extends State<DesktopHome> {
                       label: const Text('View Received'),
                     ),
 
-                    // ── Shared files status list ──────────────────────
+                    // file list
                     if (_sendFileStatus.isNotEmpty) ...[
                       const SizedBox(height: 20),
                       const Divider(),
@@ -248,19 +245,18 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  // ================= SERVER LIFECYCLE =================
-
+  // server stuff
   Future<void> _startServer() async {
     setState(() => isLoading = true);
     _sessionStart = DateTime.now();
     await _serverService.start();
 
-    // Connection state
+    // connection
     _connSub = _serverService.connectionStream.listen((c) {
       setState(() => isConnected = c);
     });
 
-    // ── File staged for sending (addFile called) ─────────────────────
+    // file added
     _serverService.onFileShared = (fileName) {
       if (!mounted) return;
       setState(() => _sendFileStatus[fileName] = 'ready');
@@ -271,7 +267,7 @@ class _DesktopHomeState extends State<DesktopHome> {
       );
     };
 
-    // ── Mobile started downloading ───────────────────────────────────
+    // downloading
     _serverService.onFileDownloadStarted = (fileName) {
       if (!mounted) return;
       setState(() => _sendFileStatus[fileName] = 'sending');
@@ -282,7 +278,7 @@ class _DesktopHomeState extends State<DesktopHome> {
       );
     };
 
-    // ── Mobile finished downloading ──────────────────────────────────
+    // downloaded
     _serverService.onFileDownloadCompleted = (fileName) {
       if (!mounted) return;
       setState(() => _sendFileStatus[fileName] = 'sent');
@@ -293,7 +289,7 @@ class _DesktopHomeState extends State<DesktopHome> {
       );
     };
 
-    // ── Mobile finished uploading (Phone → PC) ───────────────────────
+    // uploaded
     _serverService.onFileReceived = (fileName) {
       if (!mounted) return;
       _showDesktopSnackbar(
@@ -319,18 +315,16 @@ class _DesktopHomeState extends State<DesktopHome> {
     });
   }
 
-  // ================= SEND FILE =================
-
+  // send file
   Future<void> _pickAndShareFile() async {
     final result = await FilePicker.platform.pickFiles();
     if (result == null || result.files.first.path == null) return;
     final file = File(result.files.first.path!);
-    // addFile triggers onFileShared callback which shows the snackbar
+    // add file
     _serverService.addFile(file);
   }
 
-  // ================= HELPER: DESKTOP SNACKBAR =================
-
+  // snackbar
   void _showDesktopSnackbar(
     String message, {
     required IconData icon,
@@ -362,8 +356,7 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  // ================= IP =================
-
+  // ip
   Future<void> _refreshIp() async {
     final newIp = await _serverService.detectLocalIp();
     if (mounted) {
@@ -413,8 +406,7 @@ class _DesktopHomeState extends State<DesktopHome> {
     );
   }
 
-  // ================= RECEIVED FILES DIALOGS =================
-
+  // received files
   void _showSessionReceivedFiles() {
     showDialog(
       context: context,

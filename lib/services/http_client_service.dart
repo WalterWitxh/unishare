@@ -7,7 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'encryption_service.dart';
 
 class HttpClientService {
-  // Session PIN kept in memory for E2E encryption
+  // pin for encryption
   static String? sessionPin;
 
   static String? _authToken;
@@ -17,14 +17,13 @@ class HttpClientService {
     _authToken = v;
   }
 
-  // Shelf lowercases all incoming headers — send lowercase to match
+  // shelf makes headers lowercase
   static Map<String, String> get _authHeaders {
     if (authToken == null || authToken!.isEmpty) return {};
     return {'x-auth-token': authToken!};
   }
 
-  // ================= AUTH =================
-
+  // auth
   static String? lastVerifyError;
 
   static Future<String?> verifyPin(String baseUrl, String pin) async {
@@ -67,8 +66,7 @@ class HttpClientService {
     }
   }
 
-  // ================= PC → PHONE (download) =================
-
+  // download to phone
   static Future<List<String>> getFiles(String baseUrl) async {
     final res = await http.get(
       Uri.parse('$baseUrl/files'),
@@ -79,8 +77,7 @@ class HttpClientService {
     return data.map((e) => e.toString()).toList();
   }
 
-  /// Downloads a file from the desktop server and saves it to [savePath].
-  /// Handles both encrypted (small files) and plain (large files / images).
+  // download file
   static Future<void> downloadFile(
     String baseUrl,
     String fileName,
@@ -97,33 +94,32 @@ class HttpClientService {
       throw Exception('Download failed (HTTP ${res.statusCode})');
     }
 
-    // Server sends lowercase header value 'true' or 'false'
+    // server sends lowercase
     final isEncrypted =
         (res.headers['x-encrypted'] ?? '').toLowerCase() == 'true';
 
     final file = File(savePath);
 
     if (isEncrypted && sessionPin != null && sessionPin!.isNotEmpty) {
-      // Decrypt AES-256-CBC payload before writing
+      // decrypt
       final decrypted = await EncryptionService.decryptBytes(
         Uint8List.fromList(res.bodyBytes),
         sessionPin!,
       );
       await file.writeAsBytes(decrypted);
     } else {
-      // Write raw bytes directly — correct for PNG, JPG, MP4, any format
+      // write bytes
       await file.writeAsBytes(res.bodyBytes);
     }
   }
 
-  // ================= PHONE → PC (upload) =================
-
+  // upload to pc
   static Future<void> uploadFile(String baseUrl, File file) async {
     final uri = Uri.parse('$baseUrl/upload');
     final fileName = path.basename(file.path);
     final fileSize = await file.length();
 
-    // Encrypt only files under 50 MB to avoid OOM on large files
+    // encrypt small files
     final useEncryption =
         sessionPin != null &&
         sessionPin!.isNotEmpty &&
@@ -143,7 +139,7 @@ class HttpClientService {
         http.MultipartFile.fromBytes('file', encrypted, filename: fileName),
       );
     } else {
-      // Stream directly — no full-file memory buffer, safe for large videos
+      // stream big files
       request.files.add(
         http.MultipartFile(
           'file',
@@ -159,7 +155,7 @@ class HttpClientService {
       onTimeout: () => throw Exception('Upload timed out'),
     );
 
-    // Drain response to properly complete the HTTP transaction
+    // finish request
     await streamed.stream.drain<void>();
 
     if (streamed.statusCode != 200) {
@@ -167,8 +163,7 @@ class HttpClientService {
     }
   }
 
-  // ================= LOCAL STORAGE =================
-
+  // local files
   static Future<String> getDownloadPath(String fileName) async {
     final dir = await _uniShareDir();
     return path.join(dir.path, fileName);

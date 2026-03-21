@@ -16,37 +16,37 @@ class ServerService {
   late String ip;
   late int port;
 
-  // PIN authentication
+  // pin auth
   String? _sessionPin;
   final Set<String> _validTokens = {};
 
-  // Connection tracking
+  // connection
   final StreamController<bool> _connectionController =
       StreamController<bool>.broadcast();
   bool _isConnected = false;
   Timer? _disconnectTimer;
   final Duration _disconnectTimeout = const Duration(seconds: 30);
 
-  // PC → Phone
+  // pc to phone
   final Map<String, File> _sharedFiles = {};
 
-  // Phone → PC
+  // phone to pc
   Directory? _receiveDir;
 
-  // Upload state
+  // upload
   final Map<String, bool> _uploading = {};
 
-  // ── Desktop UI notification callbacks ──────────────────────────────
-  /// Fired when addFile() is called — desktop shows "ready to send" toast
+  // callbacks
+  // file shared
   void Function(String fileName)? onFileShared;
 
-  /// Fired when mobile starts downloading a file from desktop
+  // download start
   void Function(String fileName)? onFileDownloadStarted;
 
-  /// Fired when mobile finishes downloading a file from desktop
+  // download done
   void Function(String fileName)? onFileDownloadCompleted;
 
-  /// Fired when mobile finishes uploading a file to desktop
+  // upload done
   void Function(String fileName)? onFileReceived;
 
   String? lastSavedSha;
@@ -67,8 +67,7 @@ class ServerService {
     return null;
   }
 
-  // ================= START / STOP =================
-
+  // start stop
   Future<void> start() async {
     final router = Router();
 
@@ -99,8 +98,7 @@ class ServerService {
     _disconnectTimer?.cancel();
   }
 
-  // ================= PC → PHONE =================
-
+  // pc phone
   void addFile(File file) {
     final name = path.basename(file.path);
     _sharedFiles[name] = file;
@@ -216,8 +214,7 @@ class ServerService {
     );
   }
 
-  // ================= PHONE → PC =================
-
+  // phone pc
   Future<Response> _handleUpload(Request request) async {
     final authErr = _requireAuth(request);
     if (authErr != null) return authErr;
@@ -304,12 +301,10 @@ class ServerService {
     return Response.ok('Saved');
   }
 
-  // ================= STATUS =================
-
+  // status
   bool isReceiving(String filename) => _uploading[filename] == true;
 
-  // ================= CONNECTION =================
-
+  // connection
   Response _handlePing(Request request) {
     final authErr = _requireAuth(request);
     if (authErr != null) return authErr;
@@ -332,12 +327,10 @@ class ServerService {
 
   Stream<bool> get connectionStream => _connectionController.stream;
 
-  // ================= IP DETECTION =================
-
+  // ip detect
   Future<String> detectLocalIp() async => await _getLocalIp();
 
-  // ================= FILE ACCESS =================
-
+  // files
   List<File> getReceivedFiles() {
     _ensureReceiveDir();
     return _receiveDir!.existsSync()
